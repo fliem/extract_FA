@@ -4,8 +4,13 @@
 def extract_jhu(tbss_file, subject, sessions):
     import os
     import pandas as pd
-    from io import StringIO
     from nilearn.input_data import NiftiLabelsMasker
+
+    import sys
+    if sys.version_info[0] < 3:
+        from StringIO import StringIO
+    else:
+        from io import StringIO
 
     atlas_file = os.path.join(os.environ["FSLDIR"], "data/atlases", "JHU/JHU-ICBM-tracts-maxprob-thr25-2mm.nii.gz")
 
