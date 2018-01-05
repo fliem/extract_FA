@@ -94,7 +94,7 @@ else:
 
 wf = Workflow(name="wf")
 wf.base_dir = wf_dir
-wf.config['execution']['crashdump_dir'] = os.path.join(os.path.join(args.output_dir, "crash")
+wf.config['execution']['crashdump_dir'] = os.path.join(args.output_dir, "crash")
 
 # get sessions
 layout = BIDSLayout(args.bids_dir)
