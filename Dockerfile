@@ -23,7 +23,7 @@ ENV LC_ALL=C.UTF-8
 
 # Create conda environment, use nipype's conda-forge channel
 RUN conda config --add channels conda-forge && \
-    conda install -y lockfile nipype joblib
+    conda install -y lockfile nipype joblib nilearn
 
 RUN pip install pybids
 
