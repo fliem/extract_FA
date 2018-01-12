@@ -1,6 +1,35 @@
 #!/usr/bin/env python2
 
 
+from __future__ import print_function, division, unicode_literals, absolute_import
+from nipype.interfaces.base import (TraitedSpec, CommandLineInputSpec, CommandLine, File)
+
+
+class DwidenoiseInputSpec(CommandLineInputSpec):
+    in_file = File(desc="File", mandatory=True, argstr="%s", position=0, exists=True)
+    out_file = File(argstr='%s', name_source=['in_file'], hash_files=False, name_template='%s_denoised',
+                    keep_extension=True, position=1, genfile=True)
+    noise_file = File(argstr='-noise %s', name_source=['in_file'], hash_files=False, name_template='%s_noise',
+                      keep_extension=True, genfile=True)
+
+
+class DwidenoiseOutputSpec(TraitedSpec):
+    out_file = File(desc="denoised dwi file", exists=True)
+    noise_file = File(desc="noise file", exists=True)
+
+
+class Dwidenoise(CommandLine):
+    """
+    mrtrix3 dwidenoise command
+    http://mrtrix.readthedocs.io/en/latest/reference/commands/dwidenoise.html
+    """
+    _cmd = "dwidenoise -force"
+    input_spec = DwidenoiseInputSpec
+    output_spec = DwidenoiseOutputSpec
+
+
+###
+
 def extract_jhu(tbss_file, subject, sessions):
     import os
     import pandas as pd
@@ -14,7 +43,7 @@ def extract_jhu(tbss_file, subject, sessions):
 
     atlas_file = os.path.join(os.environ["FSLDIR"], "data/atlases", "JHU/JHU-ICBM-tracts-maxprob-thr25-2mm.nii.gz")
 
-    #JHU-tracts.xml
+    # JHU-tracts.xml
     # index + 1!
     jhu_txt = StringIO("""
     indx;x;y;z;label
@@ -41,7 +70,7 @@ def extract_jhu(tbss_file, subject, sessions):
     """)
 
     df = pd.read_csv(jhu_txt, sep=";")
-    #df["indx"] = df["indx"] + 1
+    # df["indx"] = df["indx"] + 1
 
     masker = NiftiLabelsMasker(labels_img=atlas_file)
     extracted = masker.fit_transform(tbss_file)
@@ -54,6 +83,8 @@ def extract_jhu(tbss_file, subject, sessions):
     data.to_csv(out_file)
 
     return out_file
+
+
 ######
 
 
@@ -61,8 +92,10 @@ from nipype.pipeline.engine import Node, Workflow, JoinNode
 from bids.grabbids import BIDSLayout
 import nipype.interfaces.io as nio
 from nipype.interfaces import fsl
-from nipype.workflows.dmri.fsl.artifacts import hmc_pipeline, ecc_pipeline
-from nipype.workflows.dmri.fsl import tbss
+from nipype.interfaces.utility import Function
+from nipype.interfaces.utility import Rename
+from nipype.workflows import dmri
+from nipype.utils.filemanip import filename_to_list
 import os
 import argparse
 
@@ -74,144 +107,154 @@ parser.add_argument('output_dir', help='The directory where the output files '
                                        'should be stored.')
 parser.add_argument('analysis_level', help='Level of the analysis that will be performed. ',
                     choices=['participant'])
-parser.add_argument('--wf_base_dir',  help="wf base directory")
+parser.add_argument('--wf_base_dir', help="wf base directory")
 parser.add_argument('--participant_label',
                     help='The label of the participant that should be analyzed. The label '
-                    'corresponds to sub-<participant_label> from the BIDS spec '
-                    '(so it does not include "sub-"). If this parameter is not '
-                    'provided all subjects should be analyzed. Multiple '
-                    'participants can be specified with a space separated list.')
+                         'corresponds to sub-<participant_label> from the BIDS spec '
+                         '(so it does not include "sub-"). If this parameter is not '
+                         'provided all subjects should be analyzed. Multiple '
+                         'participants can be specified with a space separated list.')
 parser.add_argument('--n_cpus', help='Number of CPUs/cores available to use.', default=1, type=int)
 args = parser.parse_args()
 
-subject=args.participant_label
+subject = args.participant_label
 
 if not args.wf_base_dir:
     wf_dir = os.path.join("/scratch", subject)
 else:
     wf_dir = os.path.join(args.wf_base_dir, subject)
 
-
-wf = Workflow(name="wf")
-wf.base_dir = wf_dir
-wf.config['execution']['crashdump_dir'] = os.path.join(args.output_dir, "crash")
-
 # get sessions
 layout = BIDSLayout(args.bids_dir)
 sessions = layout.get_sessions(subject=subject, modality="dwi")
 sessions.sort()
 
-# get data
-templates = {
-'dwi': 'sub-{subject_id}/ses-{session_id}/dwi/sub-{subject_id}_ses-{session_id}*_dwi.nii.gz',
-'bvec': 'sub-{subject_id}/ses-{session_id}/dwi/sub-{subject_id}_ses-{session_id}*_dwi.bvec',
-'bval': 'sub-{subject_id}/ses-{session_id}/dwi/sub-{subject_id}_ses-{session_id}*_dwi.bval',
-}
-selectfiles = Node(nio.SelectFiles(templates,
-                                base_directory=args.bids_dir),
-                                name="selectfiles")
-selectfiles.inputs.subject_id = subject
-selectfiles.iterables = ("session_id", sessions)
 
-# mask
-fslroi = Node(interface=fsl.ExtractROI(), name='fslroi')
-fslroi.inputs.t_min = 0
-fslroi.inputs.t_size = 1
-wf.connect(selectfiles, "dwi", fslroi, "in_file")
+def run_process_dwi(wf_dir, subject, sessions, args, do_denoise=False):
+    wf_name = "dwi__denoise_{den}".format(den=do_denoise)
+    wf = Workflow(name=wf_name)
+    wf.base_dir = wf_dir
+    wf.config['execution']['crashdump_dir'] = os.path.join(args.output_dir, wf_name, "crash")
 
+    # get data
+    if sessions:
+        templates = {
+            'dwi': 'sub-{subject_id}/ses-{session_id}/dwi/sub-{subject_id}_ses-{session_id}*_dwi.nii.gz',
+            'bvec': 'sub-{subject_id}/ses-{session_id}/dwi/sub-{subject_id}_ses-{session_id}*_dwi.bvec',
+            'bval': 'sub-{subject_id}/ses-{session_id}/dwi/sub-{subject_id}_ses-{session_id}*_dwi.bval',
+        }
+    else:
+        templates = {
+            'dwi': 'sub-{subject_id}/dwi/sub-{subject_id}_*dwi.nii.gz{session_id}',  # session_id needed; "" is fed in
+            'bvec': 'sub-{subject_id}/dwi/sub-{subject_id}_*dwi.bvec{session_id}',
+            'bval': 'sub-{subject_id}/dwi/sub-{subject_id}_*dwi.bval{session_id}',
+        }
+        sessions = [""]
 
-bet = Node(interface=fsl.BET(), name='bet')
-bet.inputs.mask = True
-#bet.inputs.frac = 0.3
-wf.connect(fslroi,"roi_file", bet, "in_file")
+    selectfiles = Node(nio.SelectFiles(templates,
+                                       base_directory=args.bids_dir),
+                       name="selectfiles")
+    selectfiles.inputs.subject_id = subject
+    selectfiles.iterables = ("session_id", sessions)
 
+    # PREPROCESSING
+    denoise = Node(Dwidenoise(), "denoise")
 
-from nipype.interfaces.fsl import EddyCorrect
-eddy = Node(EddyCorrect(), "eddy")
-eddy.inputs.ref_num=0
-wf.connect(selectfiles, "dwi", eddy, "in_file")
+    # mask b0
+    fslroi = Node(interface=fsl.ExtractROI(), name='fslroi')
+    fslroi.inputs.t_min = 0
+    fslroi.inputs.t_size = 1
+    bet = Node(interface=fsl.BET(), name='bet')
+    bet.inputs.mask = True
 
+    # do eddy current correction
+    eddy = Node(fsl.EddyCorrect(), "eddy")
+    eddy.inputs.ref_num = 0
 
-dtifit = Node(interface=fsl.DTIFit(), name='dtifit')
-dtifit.inputs.base_name = subject
-wf.connect(eddy, 'eddy_corrected', dtifit, 'dwi')
+    ## connections
+    if do_denoise:
+        wf.connect(selectfiles, "dwi", denoise, "in_file")
+        # fixme save noise file
+        wf.connect(denoise, "out_file", fslroi, "in_file")
+        wf.connect(denoise, "out_file", eddy, "in_file")
+    else:
+        wf.connect(selectfiles, "dwi", fslroi, "in_file")
+        wf.connect(selectfiles, "dwi", eddy, "in_file")
 
-wf.connect(bet, 'mask_file', dtifit, 'mask')
-wf.connect(selectfiles, 'bvec', dtifit, 'bvecs')
-wf.connect(selectfiles, 'bval', dtifit, 'bvals')
+    wf.connect(fslroi, "roi_file", bet, "in_file")
 
+    # TENSOR FIT
+    dtifit = Node(interface=fsl.DTIFit(), name='dtifit')
+    wf.connect(eddy, 'eddy_corrected', dtifit, 'dwi')
 
-# roundtrip to enable join node
-from nipype.interfaces.fsl import Merge, Split
-merge = JoinNode(interface=Merge(),
-             joinsource="selectfiles",
-             joinfield="in_files",
-                name="merge")
-merge.inputs.dimension = 't'
-wf.connect(dtifit, "FA", merge, "in_files")
+    wf.connect(bet, 'mask_file', dtifit, 'mask')
+    wf.connect(selectfiles, 'bvec', dtifit, 'bvecs')
+    wf.connect(selectfiles, 'bval', dtifit, 'bvals')
 
-split = Node(Split(), "split")
-split.inputs.dimension = "t"
-wf.connect(merge, "merged_file", split, "in_file")
+    ensure_list = JoinNode(interface=Function(input_names=["filename"],
+                                              output_names=["out_files"],
+                                              function=filename_to_list),
+                           joinsource="selectfiles",
+                           joinfield="filename",
+                           name="ensure_list")
+    wf.connect(dtifit, "FA", ensure_list, "filename")
 
+    # TBSS
+    tbss = dmri.fsl.tbss.create_tbss_all("tbss")
+    tbss.inputs.inputnode.skeleton_thresh = 0.2
+    wf.connect(ensure_list, "out_files", tbss, "inputnode.fa_list")
 
-# TBSS
-tbss = tbss.create_tbss_all("tbss")
-tbss.inputs.inputnode.skeleton_thresh = 0.2
-wf.connect(split, "out_files", tbss, "inputnode.fa_list")
+    ren_fa = Node(Rename(format_string="%(subject_id)s_mean_FA"), "ren_fa")
+    ren_fa.inputs.subject_id = subject
+    ren_fa.inputs.keep_ext = True
+    wf.connect(tbss, "outputnode.meanfa_file", ren_fa, "in_file")
 
+    ren_mergefa = Node(Rename(format_string="%(subject_id)s_merged_FA"), "ren_mergefa")
+    ren_mergefa.inputs.subject_id = subject
+    ren_mergefa.inputs.keep_ext = True
+    wf.connect(tbss, "outputnode.mergefa_file", ren_mergefa, "in_file")
 
-from nipype.interfaces.utility import Rename
-ren_fa = Node(Rename(format_string="%(subject_id)s_mean_FA"), "ren_fa")
-ren_fa.inputs.subject_id = subject
-ren_fa.inputs.keep_ext = True
-wf.connect(tbss,"outputnode.meanfa_file", ren_fa, "in_file" )
+    ren_projfa = Node(Rename(format_string="%(subject_id)s_projected_FA"), "ren_projfa")
+    ren_projfa.inputs.subject_id = subject
+    ren_projfa.inputs.keep_ext = True
+    wf.connect(tbss, "outputnode.projectedfa_file", ren_projfa, "in_file")
 
-ren_mergefa = Node(Rename(format_string="%(subject_id)s_merged_FA"), "ren_mergefa")
-ren_mergefa.inputs.subject_id = subject
-ren_mergefa.inputs.keep_ext = True
-wf.connect(tbss,"outputnode.mergefa_file", ren_mergefa, "in_file" )
+    ren_skel = Node(Rename(format_string="%(subject_id)s_skeleton_mask"), "ren_skel")
+    ren_skel.inputs.subject_id = subject
+    ren_skel.inputs.keep_ext = True
+    wf.connect(tbss, "outputnode.skeleton_mask", ren_skel, "in_file")
 
+    # ds
+    sinker = Node(nio.DataSink(), name='sinker')
 
+    # Name of the output folder
+    sinker.inputs.base_directory = os.path.join(args.output_dir, wf_name, "tbss_nii", subject)
+    wf.connect(ren_fa, "out_file", sinker, "@mean_fa")
+    wf.connect(ren_mergefa, "out_file", sinker, "@merged_fa")
+    wf.connect(ren_projfa, "out_file", sinker, "@projected_fa")
+    wf.connect(ren_skel, "out_file", sinker, "@skeleton")
 
-ren_projfa = Node(Rename(format_string="%(subject_id)s_projected_FA"), "ren_projfa")
-ren_projfa.inputs.subject_id = subject
-ren_projfa.inputs.keep_ext = True
-wf.connect(tbss,"outputnode.projectedfa_file", ren_projfa, "in_file" )
+    wf.write_graph(graph2use='colored')
+    wf.run(plugin='MultiProc', plugin_args={'n_procs': args.n_cpus})
 
-ren_skel = Node(Rename(format_string="%(subject_id)s_skeleton_mask"), "ren_skel")
-ren_skel.inputs.subject_id = subject
-ren_skel.inputs.keep_ext = True
-wf.connect(tbss,"outputnode.skeleton_mask", ren_skel, "in_file" )
+    sessions_file = os.path.join(args.output_dir, wf_name, "tbss_nii", subject, "sessions.txt")
+    with open(sessions_file, "w") as fi:
+        fi.write("\n".join(sessions))
 
-from nipype.interfaces.utility import Function
-extract = Node(Function(input_names=["tbss_file", "subject", "sessions"],
-                     output_names=["out_file"],
-                     function=extract_jhu),
-                     "extract")
-extract.inputs.subject = subject
-extract.inputs.sessions = sessions
-wf.connect(ren_mergefa, "out_file", extract, "tbss_file")
+run_process_dwi(wf_dir, subject, sessions, args, do_denoise=False)
+run_process_dwi(wf_dir, subject, sessions, args, do_denoise=True)
 
-# ds
-sinker = Node(nio.DataSink(), name='sinker')
-
-# Name of the output folder
-sinker.inputs.base_directory =  os.path.join(args.output_dir, "tbss_nii", subject)
-wf.connect(ren_fa, "out_file", sinker, "@mean_fa")
-wf.connect(ren_mergefa, "out_file", sinker, "@merged_fa")
-wf.connect(ren_projfa, "out_file", sinker, "@projected_fa")
-wf.connect(ren_skel, "out_file", sinker, "@skeleton")
-
-sinker2 = Node(nio.DataSink(), name='sinker2')
-sinker2.inputs.base_directory =  os.path.join(args.output_dir, "tbss_FA")
-wf.connect(extract, "out_file", sinker2, "@extracted")
-
-
-
-wf.run(plugin='MultiProc',plugin_args={'n_procs': args.n_cpus} )
-
-wf.write_graph(graph2use='colored')
-sessions_file = os.path.join(args.output_dir, "tbss_nii", subject, "sessions.txt")
-with open(sessions_file, "w") as fi:
-    fi.write("\n".join(sessions))
+# from nipype.interfaces.utility import Function
+#
+# extract = Node(Function(input_names=["tbss_file", "subject", "sessions"],
+#                         output_names=["out_file"],
+#                         function=extract_jhu),
+#                "extract")
+# extract.inputs.subject = subject
+# extract.inputs.sessions = sessions
+# wf.connect(ren_mergefa, "out_file", extract, "tbss_file")
+#
+#
+# sinker2 = Node(nio.DataSink(), name='sinker2')
+# sinker2.inputs.base_directory = os.path.join(args.output_dir, "tbss_FA")
+# wf.connect(extract, "out_file", sinker2, "@extracted")
