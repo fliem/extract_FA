@@ -96,8 +96,13 @@ from nipype.interfaces.utility import Function
 from nipype.interfaces.utility import Rename
 from nipype.workflows import dmri
 from nipype.utils.filemanip import filename_to_list
+from nipype.interfaces.utility import IdentityInterface
+
+
 import os
 import argparse
+
+import numpy as np
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                  description='tbss + jhu extraction')
@@ -120,9 +125,9 @@ args = parser.parse_args()
 subject = args.participant_label
 
 if not args.wf_base_dir:
-    wf_dir = os.path.join("/scratch", subject)
+    wf_dir = "/scratch"
 else:
-    wf_dir = os.path.join(args.wf_base_dir, subject)
+    wf_dir = args.wf_base_dir
 
 # get sessions
 layout = BIDSLayout(args.bids_dir)
@@ -130,24 +135,32 @@ sessions = layout.get_sessions(subject=subject, modality="dwi")
 sessions.sort()
 
 
-def run_process_dwi(wf_dir, subject, sessions, args, do_denoise=False):
-    wf_name = "dwi__denoise_{den}".format(den=do_denoise)
+def run_process_dwi(wf_dir, subject, sessions, args, do_denoise=False, eddy_pipe="eddy_correct",
+                    acq_str=""):
+    if eddy_pipe not in ["eddy_correct", "eddy"]:
+        raise Exception("eddy_pipe arg invalid {}".format(eddy_pipe))
+
+    wf_name = "dwi__denoise_{den}__eddy_{ed}".format(den=do_denoise, ed=eddy_pipe)
     wf = Workflow(name=wf_name)
     wf.base_dir = wf_dir
     wf.config['execution']['crashdump_dir'] = os.path.join(args.output_dir, wf_name, "crash")
 
-    # get data
+    ########################
+    # INPUT
+    ########################
     if sessions:
         templates = {
             'dwi': 'sub-{subject_id}/ses-{session_id}/dwi/sub-{subject_id}_ses-{session_id}*_dwi.nii.gz',
             'bvec': 'sub-{subject_id}/ses-{session_id}/dwi/sub-{subject_id}_ses-{session_id}*_dwi.bvec',
             'bval': 'sub-{subject_id}/ses-{session_id}/dwi/sub-{subject_id}_ses-{session_id}*_dwi.bval',
+            'json': 'sub-{subject_id}/ses-{session_id}/dwi/sub-{subject_id}_ses-{session_id}*_dwi.json',
         }
     else:
         templates = {
             'dwi': 'sub-{subject_id}/dwi/sub-{subject_id}_*dwi.nii.gz{session_id}',  # session_id needed; "" is fed in
             'bvec': 'sub-{subject_id}/dwi/sub-{subject_id}_*dwi.bvec{session_id}',
             'bval': 'sub-{subject_id}/dwi/sub-{subject_id}_*dwi.bval{session_id}',
+            'json': 'sub-{subject_id}/dwi/sub-{subject_id}_*dwi.json{session_id}',
         }
         sessions = [""]
 
@@ -157,36 +170,118 @@ def run_process_dwi(wf_dir, subject, sessions, args, do_denoise=False):
     selectfiles.inputs.subject_id = subject
     selectfiles.iterables = ("session_id", sessions)
 
+    ########################
+    # Set up outputs
+    ########################
+    sinker = Node(nio.DataSink(), name='sinker')
+    sinker.inputs.base_directory = os.path.join(args.output_dir, "dwi", wf_name, subject)
+
+    sinker2 = Node(nio.DataSink(), name='sinker2')
+    sinker2.inputs.base_directory = os.path.join(args.output_dir, "FA_extracted", wf_name)
+    ########################
     # PREPROCESSING
+    ########################
     denoise = Node(Dwidenoise(), "denoise")
+
+    # checkpoint post denoise
+    cpo_denoise = Node(IdentityInterface(fields=['dwi']), name='cpo_denoise')
+    if do_denoise:
+        wf.connect(selectfiles, "dwi", denoise, "in_file")
+        wf.connect(denoise, "out_file", cpo_denoise, "dwi")
+        wf.connect(denoise, "noise_file", sinker, "noise")
+    else:
+        wf.connect(selectfiles, "dwi", cpo_denoise, "dwi")
 
     # mask b0
     fslroi = Node(interface=fsl.ExtractROI(), name='fslroi')
     fslroi.inputs.t_min = 0
     fslroi.inputs.t_size = 1
+    wf.connect(cpo_denoise, "dwi", fslroi, "in_file")
+
     bet = Node(interface=fsl.BET(), name='bet')
     bet.inputs.mask = True
+    wf.connect(fslroi, "roi_file", bet, "in_file")
 
     # do eddy current correction
-    eddy = Node(fsl.EddyCorrect(), "eddy")
-    eddy.inputs.ref_num = 0
 
-    ## connections
-    if do_denoise:
-        wf.connect(selectfiles, "dwi", denoise, "in_file")
-        # fixme save noise file
-        wf.connect(denoise, "out_file", fslroi, "in_file")
-        wf.connect(denoise, "out_file", eddy, "in_file")
-    else:
-        wf.connect(selectfiles, "dwi", fslroi, "in_file")
-        wf.connect(selectfiles, "dwi", eddy, "in_file")
+    cpo_eddy = Node(IdentityInterface(fields=['dwi']), name='cpo_eddy')
 
-    wf.connect(fslroi, "roi_file", bet, "in_file")
+    if eddy_pipe == "eddy_correct":
+        # Version 1: FSL eddy_correct
+        eddy_correct = Node(fsl.EddyCorrect(), "eddy_correct")
+        eddy_correct.inputs.ref_num = 0
+        wf.connect(cpo_denoise, "dwi", eddy_correct, "in_file")
+        wf.connect(eddy_correct, 'eddy_corrected', cpo_eddy, 'dwi')
+
+    # elif eddy_pipe == "nipype":
+    #     from nipype.workflows.dmri.fsl.artifacts import hmc_pipeline
+    #     hmc = hmc_pipeline()
+    #     wf.connect(cpo_denoise, "dwi", hmc, "inputnode.in_file")
+    #     wf.connect(selectfiles, 'bvec', hmc, 'inputnode.in_bvec')
+    #     wf.connect(selectfiles, 'bval', hmc, 'inputnode.in_bval')
+    #     wf.connect(bet, 'mask_file', hmc, 'inputnode.in_mask')
+    #     # fixme use hmc.outputnode.out_bvec in ecc and dtifit (pip to cpo)
+    #
+    #     from nipype.workflows.dmri.fsl.artifacts import ecc_pipeline
+    #     ecc = ecc_pipeline()
+    #     wf.connect(cpo_denoise, "dwi", ecc, "inputnode.in_file")
+    #     wf.connect(bet, 'mask_file', ecc, 'inputnode.in_mask')
+    #     wf.connect(selectfiles, 'bval', ecc, 'inputnode.in_bval')
+    #     wf.connect(hmc, 'outputnode.out_xfms', ecc, 'inputnode.in_xfms')
+    #
+    #     wf.connect(ecc, "outputnode.out_file", cpo_eddy, "dwi")
+
+    elif eddy_pipe == "eddy":
+        def prepare_eddy_textfiles_fct(bval_file, acq_str, json_file):
+            import os
+            import numpy as np
+            from nipype.utils.filemanip import load_json
+
+            acq_file = os.path.abspath("acq.txt")
+            index_file = os.path.abspath("index.txt")
+
+            if "{TotalReadoutTime}" in acq_str:
+                bids_json = load_json(json_file)
+                acq_str = acq_str.format(TotalReadoutTime=bids_json["TotalReadoutTime"])
+
+            with open(acq_file, "w") as fi:
+                fi.write(acq_str)
+
+            n_dirs = np.loadtxt(bval_file).shape[0]
+            i = np.ones(n_dirs).astype(int)
+            np.savetxt(index_file, i, fmt="%d", newline=' ')
+            return acq_file, index_file
+
+        prepare_eddy_textfiles = Node(interface=Function(input_names=["bval_file", "acq_str", "json_file"],
+                                                         output_names=["acq_file", "index_file"],
+                                                         function=prepare_eddy_textfiles_fct),
+                                      name="prepare_eddy_textfiles")
+        prepare_eddy_textfiles.inputs.acq_str = acq_str
+        wf.connect(selectfiles, "bval", prepare_eddy_textfiles, "bval_file")
+        wf.connect(selectfiles, "json", prepare_eddy_textfiles, "json_file")
+
+        eddy = Node(fsl.Eddy(), "eddy")
+        eddy.inputs.slm = "linear"
+        eddy.inputs.repol = True
+        # fixme
+        # eddy.inputs.num_threads = args.n_cpus
+        wf.connect(prepare_eddy_textfiles, "acq_file", eddy, "in_acqp")
+        wf.connect(prepare_eddy_textfiles, "index_file", eddy, "in_index")
+        wf.connect(selectfiles, "bval", eddy, "in_bval")
+        wf.connect(selectfiles, "bvec", eddy, "in_bvec")
+        wf.connect(cpo_denoise, "dwi", eddy, "in_file")
+        wf.connect(bet, 'mask_file', eddy, "in_mask")
+
+        wf.connect(eddy, "out_corrected",  cpo_eddy, "dwi")
+        # fixme use corr bvecs
+        for t in fsl.Eddy().output_spec.class_editable_traits():
+            wf.connect(eddy, t, sinker, "eddy.@{}".format(t))
+
+    wf.connect(cpo_eddy, "dwi", sinker, "eddy_corrected_dwi")
 
     # TENSOR FIT
     dtifit = Node(interface=fsl.DTIFit(), name='dtifit')
-    wf.connect(eddy, 'eddy_corrected', dtifit, 'dwi')
-
+    wf.connect(cpo_eddy, "dwi", dtifit, "dwi")
     wf.connect(bet, 'mask_file', dtifit, 'mask')
     wf.connect(selectfiles, 'bvec', dtifit, 'bvecs')
     wf.connect(selectfiles, 'bval', dtifit, 'bvals')
@@ -225,36 +320,60 @@ def run_process_dwi(wf_dir, subject, sessions, args, do_denoise=False):
     wf.connect(tbss, "outputnode.skeleton_mask", ren_skel, "in_file")
 
     # ds
-    sinker = Node(nio.DataSink(), name='sinker')
-
-    # Name of the output folder
-    sinker.inputs.base_directory = os.path.join(args.output_dir, wf_name, "tbss_nii", subject)
     wf.connect(ren_fa, "out_file", sinker, "@mean_fa")
     wf.connect(ren_mergefa, "out_file", sinker, "@merged_fa")
     wf.connect(ren_projfa, "out_file", sinker, "@projected_fa")
     wf.connect(ren_skel, "out_file", sinker, "@skeleton")
 
-    wf.write_graph(graph2use='colored')
-    wf.run(plugin='MultiProc', plugin_args={'n_procs': args.n_cpus})
+    # fixme
+    # extract = Node(Function(input_names=["tbss_file", "subject", "sessions"],
+    #                         output_names=["out_file"],
+    #                         function=extract_jhu),
+    #                "extract")
+    # extract.inputs.subject = subject
+    # extract.inputs.sessions = sessions
+    # wf.connect(ren_mergefa, "out_file", extract, "tbss_file")
+    #
+    #
+    # wf.connect(extract, "out_file", sinker2, "@extracted")
 
-    sessions_file = os.path.join(args.output_dir, wf_name, "tbss_nii", subject, "sessions.txt")
-    with open(sessions_file, "w") as fi:
-        fi.write("\n".join(sessions))
+    # fixme
+    # # export sessions
+    # def export_sessions_fct(sessions):
+    #     out_file = os.path.abspath("sessions.txt")
+    #     with open(out_file, "w") as fi:
+    #         fi.write("\n".join(sessions))
+    #     return out_file
+    #
+    # export_sessions = Node(Function(input_names=["sessions"], output_names=["out_file"],
+    #                                 function=export_sessions_fct),
+    #                        name="export_sessions")
+    # export_sessions.inputs.sessions = sessions
+    # wf.connect(export_sessions, "out_file", sinker, "@sessions")
 
-run_process_dwi(wf_dir, subject, sessions, args, do_denoise=False)
-run_process_dwi(wf_dir, subject, sessions, args, do_denoise=True)
+    return wf
 
-# from nipype.interfaces.utility import Function
-#
-# extract = Node(Function(input_names=["tbss_file", "subject", "sessions"],
-#                         output_names=["out_file"],
-#                         function=extract_jhu),
-#                "extract")
-# extract.inputs.subject = subject
-# extract.inputs.sessions = sessions
-# wf.connect(ren_mergefa, "out_file", extract, "tbss_file")
-#
-#
-# sinker2 = Node(nio.DataSink(), name='sinker2')
-# sinker2.inputs.base_directory = os.path.join(args.output_dir, "tbss_FA")
-# wf.connect(extract, "out_file", sinker2, "@extracted")
+
+# set up acq for eddy
+if "lhab" in subject:
+    acq_str="0 1 0 {TotalReadoutTime}"
+elif "CC" in subject:
+    acq_str = "0 -1 0 0.0684"
+else:
+    raise("Cannot determine study")
+
+wfs = []
+wfs.append(run_process_dwi(wf_dir, subject, sessions, args, do_denoise=False, eddy_pipe="eddy_correct"))
+wfs.append(run_process_dwi(wf_dir, subject, sessions, args, do_denoise=True, eddy_pipe="eddy_correct"))
+wfs.append(run_process_dwi(wf_dir, subject, sessions, args, do_denoise=False, eddy_pipe="eddy", acq_str=acq_str))
+wfs.append(run_process_dwi(wf_dir, subject, sessions, args, do_denoise=True, eddy_pipe="eddy", acq_str=acq_str))
+
+wf = Workflow(name=subject)
+wf.base_dir = wf_dir
+wf.config['execution']['crashdump_dir'] = os.path.join(args.output_dir, "crash")
+
+wf.add_nodes(wfs)
+wf.write_graph(graph2use='colored')
+
+wf.run(plugin='MultiProc', plugin_args={'n_procs': args.n_cpus})
+
