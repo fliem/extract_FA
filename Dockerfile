@@ -1,5 +1,43 @@
-FROM bids/base_fsl:latest
+FROM neurodebian:zesty-non-free
 
+
+# https://github.com/BIDS-Apps/MRtrix3_connectome/blob/master/Dockerfile
+RUN apt-get update && apt-get install -y curl git perl-modules python software-properties-common tar unzip wget
+# Now that we have software-properties-common, can use add-apt-repository to get to g++ version 5, which is required by JSON for Modern C++
+RUN add-apt-repository ppa:ubuntu-toolchain-r/test
+RUN apt-get update && apt-get install -y g++-5
+
+# Additional dependencies for MRtrix3 compilation
+RUN apt-get install -y libeigen3-dev zlib1g-dev
+
+# MRtrix3 setup
+ENV CXX=/usr/bin/g++-5
+# Note: Current commit being checked out includes various fixes that have been necessary to get test data working; eventually it will instead point to a release tag that includes these updates
+RUN git clone https://github.com/MRtrix3/mrtrix3.git mrtrix3 && cd mrtrix3 && git checkout 2742e2f && python configure -nogui && NUMBER_OF_PROCESSORS=1 python build && git describe --tags > /mrtrix3_version
+
+
+RUN apt-get update && \
+    apt-get install -y ants && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+ENV ANTSPATH=/usr/lib/ants/
+ENV PATH=$ANTSPATH:$PATH
+
+
+RUN apt-get update -qq && apt-get install -yq --no-install-recommends bc dc libfontconfig1 libfreetype6 libgl1-mesa-dev libglu1-mesa-dev libgomp1 libice6 libmng1 libxcursor1 libxft2 libxinerama1 libxrandr2 libxrender1 libxt6 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
+    && echo "Downloading FSL ..." \
+    && curl -sSL https://fsl.fmrib.ox.ac.uk/fsldownloads/fsl-5.0.10-centos6_64.tar.gz \
+    | tar zx -C /opt \
+    && /bin/bash /opt/fsl/etc/fslconf/fslpython_install.sh -q -f /opt/fsl
+ENV FSLDIR=/opt/fsl \
+    PATH=/opt/fsl/bin:$PATH
+
+#RUN rm -f `which eddy`
+#RUN mkdir /opt/eddy/
+#RUN wget -qO- https://fsl.fmrib.ox.ac.uk/fsldownloads/patches/eddy-patch-fsl-5.0.9/centos6/eddy_openmp > /opt/eddy/eddy_openmp
+#RUN chmod 775 /opt/eddy/eddy_openmp
+#####
 
 
 #### PYTHON / NIPYPE
