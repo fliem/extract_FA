@@ -56,7 +56,6 @@ class DwibiascorrectInputSpec(CommandLineInputSpec):
     in_file = File(desc="File", mandatory=True, argstr="%s", position=0, exists=True)
     bvec = File(desc="File", mandatory=True, argstr="-fslgrad %s", position=-2, exists=True)
     bval = File(desc="File", mandatory=True, argstr="%s", position=-1, exists=True)
-    in_mask_file = File(desc="File", mandatory=True, argstr="-mask %s", exists=True)
 
     out_file = File(argstr='%s', name_source=['in_file'], hash_files=False, name_template='%s_biascorr',
                     keep_extension=True, position=1, genfile=True)
@@ -171,7 +170,24 @@ class AntsRegistrationSynQuickOutputSpec(TraitedSpec):
 class AntsRegistrationSynQuick(CommandLine):
     """
     """
-    _cmd = "antsRegistrationSynQuick.sh -d 3"
+    _cmd = "antsRegistrationSyNQuick.sh -d 3"
+    input_spec = AntsRegistrationSynQuickInputSpec
+    output_spec = AntsRegistrationSynQuickOutputSpec
+
+    def _list_outputs(self):
+        outputs = self.output_spec().get()
+        outputs['warped_image'] = os.path.abspath(self.inputs.output_prefix + 'Warped.nii.gz')
+        # outputs['inverse_warped_image'] = os.path.abspath(self.inputs.output_prefix + '1InverseWarped.nii.gz')
+        outputs['out_matrix'] = os.path.abspath(self.inputs.output_prefix + '0GenericAffine.mat')
+        outputs['forward_warp_field'] = os.path.abspath(self.inputs.output_prefix + '1Warp.nii.gz')
+        outputs['inverse_warp_field'] = os.path.abspath(self.inputs.output_prefix + '1InverseWarp.nii.gz')
+        return outputs
+
+
+class AntsRegistrationSyn(CommandLine):
+    """
+    """
+    _cmd = "antsRegistrationSyN.sh -d 3"
     input_spec = AntsRegistrationSynQuickInputSpec
     output_spec = AntsRegistrationSynQuickOutputSpec
 
@@ -271,7 +287,7 @@ def extract_jhu(tbss_file, subject, sessions):
 from nipype.pipeline.engine import Node, Workflow, JoinNode
 from bids.grabbids import BIDSLayout
 import nipype.interfaces.io as nio
-from nipype.interfaces import fsl
+from nipype.interfaces import fsl, ants
 from nipype.interfaces.utility import Function
 from nipype.interfaces.utility import Rename
 from nipype.workflows import dmri
@@ -328,6 +344,9 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     else:
         use_json_file = False
 
+    sessions_interface = Node(IdentityInterface(fields=["session"]), "sessions_interface")
+    sessions_interface.iterables = ("session", sessions)
+
     if sessions:
         templates = {
             'dwi': 'sub-{subject_id}/ses-{session_id}/dwi/sub-{subject_id}_ses-{session_id}*_dwi.nii.gz',
@@ -350,9 +369,10 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
                                        base_directory=args.bids_dir),
                        name="selectfiles")
     selectfiles.inputs.subject_id = subject
-    #selectfiles.inputs.raise_on_empty = False
-    #selectfiles.inputs.ignore_exception = True
-    selectfiles.iterables = ("session_id", sessions)
+    wf.connect(sessions_interface, "session", selectfiles, "session_id")
+    # selectfiles.inputs.raise_on_empty = False
+    # selectfiles.inputs.ignore_exception = True
+    #selectfiles.iterables = ("session_id", sessions)
 
     ########################
     # Set up outputs
@@ -411,7 +431,7 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
         eddy.inputs.slm = "linear"
         eddy.inputs.repol = True
         # fixme
-        eddy.inputs.num_threads = 1  # args.n_cpus
+        eddy.inputs.num_threads = 2  # args.n_cpus
         wf.connect(prepare_eddy_textfiles, "acq_file", eddy, "in_acqp")
         wf.connect(prepare_eddy_textfiles, "index_file", eddy, "in_index")
         wf.connect(selectfiles, "bval", eddy, "in_bval")
@@ -421,7 +441,6 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
 
         bias = Node(Dwibiascorrect(), "bias")
         wf.connect(eddy, "out_corrected", bias, "in_file")
-        wf.connect(init_mask_dil, 'out_file', bias, "in_mask_file")
         wf.connect(selectfiles, "bval", bias, "bval")
         wf.connect(selectfiles, "bvec", bias, "bvec")
 
@@ -469,7 +488,7 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     ensure_list = JoinNode(interface=Function(input_names=["filename"],
                                               output_names=["out_files"],
                                               function=filename_to_list),
-                           joinsource="selectfiles",
+                           joinsource="sessions_interface",
                            joinfield="filename",
                            name="ensure_list")
     wf.connect(mrtrix_fit, "out_file_fa", ensure_list, "filename")
@@ -506,15 +525,56 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     wf.connect(ren_skel, "out_file", sinker, "@skeleton")
 
     # ANTS REG
-    ants_reg = Node(AntsRegistrationSynQuick(), "ants_reg")
+    ants_reg_quick = Node(AntsRegistrationSynQuick(), "ants_reg_quick")
+    wf.connect(mrtrix_fit, "out_file_fa", ants_reg_quick, "in_file")
+    ants_reg_quick.inputs.template_file = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
+    ants_reg_quick.inputs.output_prefix = "MNI"  # fixme
+    ants_reg_quick.inputs.num_threads = 2  # fixme
+
+    ants_reg = Node(AntsRegistrationSyn(), "ants_reg")
     wf.connect(mrtrix_fit, "out_file_fa", ants_reg, "in_file")
     ants_reg.inputs.template_file = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
     ants_reg.inputs.output_prefix = "MNI"  # fixme
-    ants_reg.inputs.num_threads = 2  # fixme
-
+    ants_reg.inputs.num_threads = args.n_cpus  # fixme
     # fixme
-    for t in AntsRegistrationSynQuick().output_spec.class_editable_traits():
-        wf.connect(ants_reg, t, sinker, "antsreg.@{}".format(t))
+    for t in AntsRegistrationSyn().output_spec.class_editable_traits():
+        wf.connect(ants_reg, t, sinker, "antsreg_nonquick.@{}".format(t))
+
+    def make_trasform_list_fct(linear, warp):
+        return [warp, linear]
+
+    make_trasform_list = Node(Function(input_names=["linear", "warp"],
+                                       output_names=["out_list"],
+                                       function=make_trasform_list_fct),
+                              "make_trasform_list")
+    wf.connect(ants_reg, "out_matrix", make_trasform_list, "linear")
+    wf.connect(ants_reg, "forward_warp_field", make_trasform_list, "warp")
+
+    transform_FA = Node(ants.resampling.ApplyTransforms(), "transform_FA")
+    transform_FA.inputs.reference_image = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
+    wf.connect(mrtrix_fit, "out_file_fa", transform_FA, "input_image")
+    wf.connect(make_trasform_list, "out_list", transform_FA, "transforms")
+
+    def reg_plot_fct(in_file, template_file, subject, session=""):
+        from nilearn import plotting
+        import os
+        if session:
+            sub_str = "sub-{}_ses-{}".format(subject, session)
+        else:
+            sub_str = "sub-{}".format(subject)
+        out_file = os.path.abspath(sub_str + "_reg.png")
+        display = plotting.plot_anat(in_file, title=sub_str)
+        display.add_edges(template_file)
+        display.savefig(out_file)
+        return out_file
+
+    reg_plot = Node(Function(input_names=["in_file", "template_file", "subject", "session"],
+                             output_names=["out_file"],
+                             function=reg_plot_fct),
+                    "reg_plot")
+    wf.connect(transform_FA, "", reg_plot, "in_file")
+    reg_plot.inputs.template_file = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
+    reg_plot.inputs.subject = subject
 
     # fixme
     # extract = Node(Function(input_names=["tbss_file", "subject", "sessions"],
