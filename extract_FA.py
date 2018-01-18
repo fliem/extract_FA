@@ -466,7 +466,10 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     def plot_motion_fnc(motion_file, subject_session):
         import os
         import pandas as pd
+        import matplotlib as mpl
+        mpl.use('Agg')
         import matplotlib.pyplot as plt
+
         df = pd.read_csv(motion_file, sep="  ", header=None,
                          names=["rms_movement_vs_first", "rms_movement_vs_previous"], engine='python')
         df.plot(title=subject_session)
