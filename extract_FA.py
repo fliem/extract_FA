@@ -163,7 +163,6 @@ class AntsRegistrationSynInputSpec(CommandLineInputSpec):
 
 class AntsRegistrationSynOutputSpec(TraitedSpec):
     warped_image = File(exists=True, desc="Warped image")
-    inverse_warped_image = File(exists=True, desc="Inverse warped image")
     out_matrix = File(exists=True, desc='Affine matrix')
     forward_warp_field = File(exists=True, desc='Forward warp field')
     inverse_warp_field = File(exists=True, desc='Inverse warp field')
@@ -179,7 +178,6 @@ class AntsRegistrationSynQuick(CommandLine):
     def _list_outputs(self):
         outputs = self.output_spec().get()
         outputs['warped_image'] = os.path.abspath(self.inputs.output_prefix + 'Warped.nii.gz')
-        # outputs['inverse_warped_image'] = os.path.abspath(self.inputs.output_prefix + '1InverseWarped.nii.gz')
         outputs['out_matrix'] = os.path.abspath(self.inputs.output_prefix + '0GenericAffine.mat')
         outputs['forward_warp_field'] = os.path.abspath(self.inputs.output_prefix + '1Warp.nii.gz')
         outputs['inverse_warp_field'] = os.path.abspath(self.inputs.output_prefix + '1InverseWarp.nii.gz')
@@ -196,7 +194,6 @@ class AntsRegistrationSyn(CommandLine):
     def _list_outputs(self):
         outputs = self.output_spec().get()
         outputs['warped_image'] = os.path.abspath(self.inputs.output_prefix + 'Warped.nii.gz')
-        outputs['inverse_warped_image'] = os.path.abspath(self.inputs.output_prefix + 'InverseWarped.nii.gz')
         outputs['out_matrix'] = os.path.abspath(self.inputs.output_prefix + '0GenericAffine.mat')
         outputs['forward_warp_field'] = os.path.abspath(self.inputs.output_prefix + '1Warp.nii.gz')
         outputs['inverse_warp_field'] = os.path.abspath(self.inputs.output_prefix + '1InverseWarp.nii.gz')
