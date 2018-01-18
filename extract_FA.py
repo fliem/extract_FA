@@ -399,9 +399,9 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
                      ]
     sinker_preproc.inputs.substitutions = substitutions
 
-    sinker_regplots = Node(nio.DataSink(), name='sinker_regplots')
-    sinker_regplots.inputs.base_directory = args.output_dir
-    sinker_regplots.inputs.parameterization = False
+    sinker_plots = Node(nio.DataSink(), name='sinker_plots')
+    sinker_plots.inputs.base_directory = args.output_dir
+    sinker_plots.inputs.parameterization = False
 
     sinker_extracted = Node(nio.DataSink(), name='sinker_extracted')
     sinker_extracted.inputs.base_directory = args.output_dir
@@ -462,6 +462,24 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     eddy_out = list(set(eddy_out) - {'out_corrected', 'out_rotated_bvecs'})
     for t in eddy_out:
         wf.connect(eddy, t, sinker_preproc, "dwi.eddy.@{}".format(t))
+
+    def plot_motion_fnc(motion_file, subject_session):
+        import os
+        import pandas as pd
+        import matplotlib.pyplot as plt
+        df = pd.read_csv(motion_file, sep="  ", header=None,
+                         names=["rms_movement_vs_first", "rms_movement_vs_previous"], engine='python')
+        df.plot(title=subject_session)
+        out_file = os.path.abspath(subject_session + "_motion.pdf")
+        plt.savefig(out_file)
+        return out_file
+
+    motion_plot = Node(Function(input_names=["motion_file", "subject_session"], output_names=["out_file"],
+                                function=plot_motion_fnc),
+                       "motion_plot")
+    wf.connect(eddy, "out_restricted_movement_rms", motion_plot, "motion_file")
+    wf.connect(format_subject_session, "subject_session_label", motion_plot, "subject_session")
+    wf.connect(motion_plot, "out_file", sinker_plots, "motion")
 
     wf.connect(bias, "out_file", dwi_preprocessed, "dwi")
     wf.connect(mask, "out_mask_file", dwi_preprocessed, "mask")
@@ -561,8 +579,8 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     wf.connect(transform_fa, "output_image", reg_plot, "in_file")
     reg_plot.inputs.template_file = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
     wf.connect(format_subject_session, "subject_session_label", reg_plot, "subject_session")
-    wf.connect(reg_plot, "out_file_reg", sinker_regplots, "regplots")
-    wf.connect(reg_plot, "out_file_tract", sinker_regplots, "tractplots")
+    wf.connect(reg_plot, "out_file_reg", sinker_plots, "regplots")
+    wf.connect(reg_plot, "out_file_tract", sinker_plots, "tractplots")
 
     def concat_filenames_fct(in_file_fa, in_file_md, in_file_ad, in_file_rd):
         return [in_file_fa, in_file_md, in_file_ad, in_file_rd]
