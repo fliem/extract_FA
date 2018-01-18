@@ -55,7 +55,7 @@ RUN conda config --add channels conda-forge && \
     conda install -y lockfile nipype joblib nilearn
 
 RUN pip install pybids
-
+RUN conda install -y pandas
 
 RUN mkdir /scratch
 RUN mkdir -p /code

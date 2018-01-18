@@ -71,7 +71,7 @@ class DwibiascorrectOutputSpec(TraitedSpec):
 class Dwibiascorrect(CommandLine):
     """
     mrtrix3 dwi2mask command
-    http://mrtrix.readthedocs.io/en/latest/reference/commands/dwi2mask.html
+    http://mrtrix.readthedocs.io/en/latest/reference/scripts/dwibiascorrect.html
     """
     _cmd = "dwibiascorrect -info -ants"
     input_spec = DwibiascorrectInputSpec
@@ -92,7 +92,7 @@ class DilatemaskOutputSpec(TraitedSpec):
 class Dilatemask(CommandLine):
     """
     mrtrix3 dwi2mask command
-    http://mrtrix.readthedocs.io/en/latest/reference/commands/dwi2mask.html
+    http://mrtrix.readthedocs.io/en/latest/reference/commands/maskfilter.html
     """
     _cmd = "maskfilter -info"
     input_spec = DilatemaskInputSpec
@@ -115,6 +115,7 @@ class Dwi2tensorOutputSpec(TraitedSpec):
 
 class Dwi2tensor(CommandLine):
     """
+    http://mrtrix.readthedocs.io/en/latest/reference/commands/dwi2tensor.html
     """
     _cmd = "dwi2tensor -info"
     input_spec = Dwi2tensorInputSpec
@@ -144,6 +145,7 @@ class Tensor2metricOutputSpec(TraitedSpec):
 
 class Tensor2metric(CommandLine):
     """
+    http://mrtrix.readthedocs.io/en/latest/reference/commands/tensor2metric.html
     """
     _cmd = "tensor2metric -info"
     input_spec = Tensor2metricInputSpec
@@ -152,14 +154,14 @@ class Tensor2metric(CommandLine):
 
 ##
 
-class AntsRegistrationSynQuickInputSpec(CommandLineInputSpec):
+class AntsRegistrationSynInputSpec(CommandLineInputSpec):
     in_file = File(desc="Tensor file", mandatory=True, argstr="-m %s", exists=True)
     template_file = File(desc="Tensor file", mandatory=True, argstr="-f %s", exists=True)
     output_prefix = Str(argstr="-o %s", name_source=['in_file'], name_template='%s_mni_', keep_extension=False)
     num_threads = traits.Int(default_value=1, desc='Number of threads (default = 1)', argstr='-n %d')
 
 
-class AntsRegistrationSynQuickOutputSpec(TraitedSpec):
+class AntsRegistrationSynOutputSpec(TraitedSpec):
     warped_image = File(exists=True, desc="Warped image")
     inverse_warped_image = File(exists=True, desc="Inverse warped image")
     out_matrix = File(exists=True, desc='Affine matrix')
@@ -171,8 +173,8 @@ class AntsRegistrationSynQuick(CommandLine):
     """
     """
     _cmd = "antsRegistrationSyNQuick.sh -d 3"
-    input_spec = AntsRegistrationSynQuickInputSpec
-    output_spec = AntsRegistrationSynQuickOutputSpec
+    input_spec = AntsRegistrationSynInputSpec
+    output_spec = AntsRegistrationSynOutputSpec
 
     def _list_outputs(self):
         outputs = self.output_spec().get()
@@ -188,8 +190,8 @@ class AntsRegistrationSyn(CommandLine):
     """
     """
     _cmd = "antsRegistrationSyN.sh -d 3"
-    input_spec = AntsRegistrationSynQuickInputSpec
-    output_spec = AntsRegistrationSynQuickOutputSpec
+    input_spec = AntsRegistrationSynInputSpec
+    output_spec = AntsRegistrationSynOutputSpec
 
     def _list_outputs(self):
         outputs = self.output_spec().get()
@@ -226,11 +228,11 @@ def prepare_eddy_textfiles_fct(bval_file, acq_str, json_file=""):
 
 ###
 
-def extract_jhu(tbss_file, subject, sessions):
+def extract_jhu(in_file, metric_labels, subject, session):
+    # takes 4d file with metrics
     import os
     import pandas as pd
     from nilearn.input_data import NiftiLabelsMasker
-
     import sys
     if sys.version_info[0] < 3:
         from StringIO import StringIO
@@ -266,17 +268,19 @@ def extract_jhu(tbss_file, subject, sessions):
     """)
 
     df = pd.read_csv(jhu_txt, sep=";")
-    # df["indx"] = df["indx"] + 1
-
     masker = NiftiLabelsMasker(labels_img=atlas_file)
-    extracted = masker.fit_transform(tbss_file)
 
-    data = pd.DataFrame(extracted, columns=df.label, index=sessions)
-    data["session_id"] = data.index
-    data["subject_id"] = subject
+    extracted = masker.fit_transform(in_file)
+    data = pd.DataFrame(extracted, columns=df.label)
+    data["metric"] = metric_labels
 
-    out_file = os.path.abspath("{subject}_jhu_extracted.csv".format(subject=subject))
-    data.to_csv(out_file)
+    data["session"] = session
+    data["subject"] = subject
+
+    subject_sessions_str = "sub-{subject}_ses-{session}".format(subject=subject, session=session) if session else \
+        "sub-{subject}".format(subject=subject)
+    out_file = os.path.abspath("{}_jhu_extracted.csv".format(subject_sessions_str))
+    data.to_csv(out_file, index=False)
 
     return out_file
 
@@ -289,24 +293,24 @@ from bids.grabbids import BIDSLayout
 import nipype.interfaces.io as nio
 from nipype.interfaces import fsl, ants
 from nipype.interfaces.utility import Function
-from nipype.interfaces.utility import Rename
-from nipype.workflows import dmri
-from nipype.utils.filemanip import filename_to_list
 from nipype.interfaces.utility import IdentityInterface
 
 import os
 import argparse
+import shutil
+from glob import glob
+import re
 
-import numpy as np
+import pandas as pd
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                                 description='tbss + jhu extraction')
+                                 description='dwi preprocessing + jhu extraction')
 parser.add_argument('bids_dir', help='The directory with the input dataset '
                                      'formatted according to the BIDS standard.')
 parser.add_argument('output_dir', help='The directory where the output files '
                                        'should be stored.')
 parser.add_argument('analysis_level', help='Level of the analysis that will be performed. ',
-                    choices=['participant'])
+                    choices=['participant', 'group'])
 parser.add_argument('--wf_base_dir', help="wf base directory")
 parser.add_argument('--participant_label',
                     help='The label of the participant that should be analyzed. The label '
@@ -315,27 +319,24 @@ parser.add_argument('--participant_label',
                          'provided all subjects should be analyzed. Multiple '
                          'participants can be specified with a space separated list.')
 parser.add_argument('--n_cpus', help='Number of CPUs/cores available to use.', default=1, type=int)
+parser.add_argument('--ants_reg_quick', help='Use AntsRegistrationSynQuick instead of AntsRegistrationSyn',
+                    action='store_true')
 args = parser.parse_args()
 
 subject = args.participant_label
 
-if not args.wf_base_dir:
-    wf_dir = "/scratch"
-else:
-    wf_dir = args.wf_base_dir
 
-# get sessions
-layout = BIDSLayout(args.bids_dir)
-sessions = layout.get_sessions(subject=subject, modality="dwi")
-sessions.sort()
-
-
-def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str=""):
+def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str="", ants_quick=False):
     wf_name = "dwi__prep_{}".format(prep_pipe)
     wf = Workflow(name=wf_name)
     wf.base_dir = wf_dir
     wf.config['execution']['crashdump_dir'] = os.path.join(args.output_dir, wf_name, "crash")
 
+    if sessions:
+        n_cpus_big_jobs = int(args.n_cpus / len(sessions)) if args.n_cpus >= len(sessions) else int(args.n_cpus / 2)
+    else:
+        n_cpus_big_jobs = args.n_cpus
+    n_cpus_big_jobs = 1 if n_cpus_big_jobs < 1 else n_cpus_big_jobs
     ########################
     # INPUT
     ########################
@@ -343,9 +344,6 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
         use_json_file = True
     else:
         use_json_file = False
-
-    sessions_interface = Node(IdentityInterface(fields=["session"]), "sessions_interface")
-    sessions_interface.iterables = ("session", sessions)
 
     if sessions:
         templates = {
@@ -365,263 +363,318 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
             templates['json'] = 'sub-{subject_id}/dwi/sub-{subject_id}_*dwi.json{session_id}'
         sessions = [""]
 
+    sessions_interface = Node(IdentityInterface(fields=["session"]), "sessions_interface")
+    sessions_interface.iterables = ("session", sessions)
+
     selectfiles = Node(nio.SelectFiles(templates,
                                        base_directory=args.bids_dir),
                        name="selectfiles")
     selectfiles.inputs.subject_id = subject
     wf.connect(sessions_interface, "session", selectfiles, "session_id")
-    # selectfiles.inputs.raise_on_empty = False
-    # selectfiles.inputs.ignore_exception = True
-    #selectfiles.iterables = ("session_id", sessions)
+
+    def format_subject_session_fct(subject, session=""):
+        subject_label = "sub-" + subject
+        session_label = "ses-" + session if session else ""
+        subject_session_label = subject_label + ("_" + session_label if session_label else "")
+        subject_session_prefix = subject_session_label + "_"
+        subject_session_path = subject_label + ("/" + session_label if session_label else "")
+        return subject_label, session_label, subject_session_label, subject_session_prefix, subject_session_path
+
+    format_subject_session = Node(Function(input_names=["subject", "session"],
+                                           output_names=["subject_label", "session_label", "subject_session_label",
+                                                         "subject_session_prefix", "subject_session_path"],
+                                           function=format_subject_session_fct), "format_subject_session")
+    format_subject_session.inputs.subject = subject
+    wf.connect(sessions_interface, "session", format_subject_session, "session")
 
     ########################
     # Set up outputs
     ########################
-    sinker = Node(nio.DataSink(), name='sinker')
-    sinker.inputs.base_directory = os.path.join(args.output_dir, "dwi", wf_name, subject)
+    sinker_preproc = Node(nio.DataSink(), name='sinker_preproc')
+    sinker_preproc.inputs.base_directory = os.path.join(args.output_dir, "dwi_preprocessed")
+    sinker_preproc.inputs.parameterization = False
+    wf.connect(format_subject_session, 'subject_session_path', sinker_preproc, 'container')
+    substitutions = [("_biascorr", ""),
+                     ("_tensor", ""),
+                     ('.eddy_rotated_bvecs', '.bvec'),
+                     ('_acq-ap_run-1_dwi', ''),
+                     ("_dwi", "")
+                     ]
+    sinker_preproc.inputs.substitutions = substitutions
 
-    sinker2 = Node(nio.DataSink(), name='sinker2')
-    sinker2.inputs.base_directory = os.path.join(args.output_dir, "FA_extracted", wf_name)
+    sinker_regplots = Node(nio.DataSink(), name='sinker_regplots')
+    sinker_regplots.inputs.base_directory = args.output_dir
+    sinker_regplots.inputs.parameterization = False
 
-    dwi_preprocessed = Node(IdentityInterface(fields=['dwi', 'mask']), name='dwi_preprocessed')
+    sinker_extracted = Node(nio.DataSink(), name='sinker_extracted')
+    sinker_extracted.inputs.base_directory = args.output_dir
+    sinker_extracted.inputs.parameterization = False
+
+    dwi_preprocessed = Node(IdentityInterface(fields=['dwi', 'mask', 'bvec', 'bval']), name='dwi_preprocessed')
+
     ########################
-    # PREPROCESSING old fsl style
+    # PREPROCESSING
     ########################
-    if prep_pipe == "old_fsl":
-        # mask b0
-        fslroi = Node(interface=fsl.ExtractROI(), name='fslroi')
-        fslroi.inputs.t_min = 0
-        fslroi.inputs.t_size = 1
-        wf.connect(selectfiles, "dwi", fslroi, "in_file")
+    # http://mrtrix.readthedocs.io/en/0.3.16/workflows/DWI_preprocessing_for_quantitative_analysis.html
+    denoise = Node(Dwidenoise(), "denoise")
+    wf.connect(selectfiles, "dwi", denoise, "in_file")
+    wf.connect(denoise, "noise_file", sinker_preproc, "qa.@noise")
 
-        bet = Node(interface=fsl.BET(), name='bet')
-        bet.inputs.mask = True
-        wf.connect(fslroi, "roi_file", bet, "in_file")
-        wf.connect(bet, "mask_file", dwi_preprocessed, "mask")
+    prepare_eddy_textfiles = Node(interface=Function(input_names=["bval_file", "acq_str", "json_file"],
+                                                     output_names=["acq_file", "index_file"],
+                                                     function=prepare_eddy_textfiles_fct),
+                                  name="prepare_eddy_textfiles")
+    prepare_eddy_textfiles.inputs.acq_str = acq_str
+    wf.connect(selectfiles, "bval", prepare_eddy_textfiles, "bval_file")
+    if use_json_file:
+        wf.connect(selectfiles, "json", prepare_eddy_textfiles, "json_file")
 
-        eddy_correct = Node(fsl.EddyCorrect(), "eddy_correct")
-        eddy_correct.inputs.ref_num = 0
-        wf.connect(selectfiles, "dwi", eddy_correct, "in_file")
-        wf.connect(eddy_correct, 'eddy_corrected', dwi_preprocessed, 'dwi')
+    init_mask = Node(Dwi2mask(), "init_mask")
+    wf.connect(denoise, "out_file", init_mask, "in_file")
+    wf.connect(selectfiles, "bvec", init_mask, "bvec")
+    wf.connect(selectfiles, "bval", init_mask, "bval")
 
-    elif prep_pipe == "mrtrix":
-        # http://mrtrix.readthedocs.io/en/0.3.16/workflows/DWI_preprocessing_for_quantitative_analysis.html
-        denoise = Node(Dwidenoise(), "denoise")
-        wf.connect(selectfiles, "dwi", denoise, "in_file")
-        wf.connect(denoise, "noise_file", sinker, "noise")
+    init_mask_dil = Node(Dilatemask(), "init_mask_dil")
+    wf.connect(init_mask, "out_mask_file", init_mask_dil, "in_file")
 
-        prepare_eddy_textfiles = Node(interface=Function(input_names=["bval_file", "acq_str", "json_file"],
-                                                         output_names=["acq_file", "index_file"],
-                                                         function=prepare_eddy_textfiles_fct),
-                                      name="prepare_eddy_textfiles")
-        prepare_eddy_textfiles.inputs.acq_str = acq_str
-        wf.connect(selectfiles, "bval", prepare_eddy_textfiles, "bval_file")
-        if use_json_file:
-            wf.connect(selectfiles, "json", prepare_eddy_textfiles, "json_file")
+    eddy = Node(fsl.Eddy(), "eddy")
+    eddy.inputs.slm = "linear"
+    eddy.inputs.repol = True
+    eddy.inputs.num_threads = n_cpus_big_jobs
+    wf.connect(prepare_eddy_textfiles, "acq_file", eddy, "in_acqp")
+    wf.connect(prepare_eddy_textfiles, "index_file", eddy, "in_index")
+    wf.connect(selectfiles, "bval", eddy, "in_bval")
+    wf.connect(selectfiles, "bvec", eddy, "in_bvec")
+    wf.connect(denoise, "out_file", eddy, "in_file")
+    wf.connect(init_mask_dil, 'out_file', eddy, "in_mask")
+    wf.connect(format_subject_session, 'subject_session_label', eddy, "out_base")
 
-        init_mask = Node(Dwi2mask(), "init_mask")
-        wf.connect(denoise, "out_file", init_mask, "in_file")
-        wf.connect(selectfiles, "bvec", init_mask, "bvec")
-        wf.connect(selectfiles, "bval", init_mask, "bval")
+    bias = Node(Dwibiascorrect(), "bias")
+    wf.connect(eddy, "out_corrected", bias, "in_file")
+    wf.connect(selectfiles, "bval", bias, "bval")
+    wf.connect(selectfiles, "bvec", bias, "bvec")
+    wf.connect(bias, "out_bias_file", sinker_preproc, "qa.@bias")
 
-        init_mask_dil = Node(Dilatemask(), "init_mask_dil")
-        wf.connect(init_mask, "out_mask_file", init_mask_dil, "in_file")
+    mask = Node(Dwi2mask(), "mask")
+    wf.connect(bias, "out_file", mask, "in_file")
+    wf.connect(selectfiles, "bvec", mask, "bvec")
+    wf.connect(selectfiles, "bval", mask, "bval")
 
-        eddy = Node(fsl.Eddy(), "eddy")
-        eddy.inputs.slm = "linear"
-        eddy.inputs.repol = True
-        # fixme
-        eddy.inputs.num_threads = 2  # args.n_cpus
-        wf.connect(prepare_eddy_textfiles, "acq_file", eddy, "in_acqp")
-        wf.connect(prepare_eddy_textfiles, "index_file", eddy, "in_index")
-        wf.connect(selectfiles, "bval", eddy, "in_bval")
-        wf.connect(selectfiles, "bvec", eddy, "in_bvec")
-        wf.connect(denoise, "out_file", eddy, "in_file")
-        wf.connect(init_mask_dil, 'out_file', eddy, "in_mask")
+    # output eddy text files
+    eddy_out = fsl.Eddy().output_spec.class_editable_traits()
+    eddy_out = list(set(eddy_out) - {'out_corrected', 'out_rotated_bvecs'})
+    for t in eddy_out:
+        wf.connect(eddy, t, sinker_preproc, "dwi.eddy.@{}".format(t))
 
-        bias = Node(Dwibiascorrect(), "bias")
-        wf.connect(eddy, "out_corrected", bias, "in_file")
-        wf.connect(selectfiles, "bval", bias, "bval")
-        wf.connect(selectfiles, "bvec", bias, "bvec")
+    wf.connect(bias, "out_file", dwi_preprocessed, "dwi")
+    wf.connect(mask, "out_mask_file", dwi_preprocessed, "mask")
+    wf.connect(eddy, "out_rotated_bvecs", dwi_preprocessed, "bvec")
+    wf.connect(selectfiles, "bval", dwi_preprocessed, "bval")
 
-        mask = Node(Dwi2mask(), "mask")
-        wf.connect(bias, "out_file", mask, "in_file")
-        wf.connect(selectfiles, "bvec", mask, "bvec")
-        wf.connect(selectfiles, "bval", mask, "bval")
-        wf.connect(mask, "out_mask_file", dwi_preprocessed, "mask")
+    wf.connect(dwi_preprocessed, "dwi", sinker_preproc, "dwi.@dwi")
+    wf.connect(dwi_preprocessed, "bvec", sinker_preproc, "dwi.@bvec")
+    wf.connect(dwi_preprocessed, "bval", sinker_preproc, "dwi.@bval")
+    wf.connect(dwi_preprocessed, "mask", sinker_preproc, "dwi.@mask")
 
-        # fixme
-        for t in Dwibiascorrect().output_spec.class_editable_traits():
-            wf.connect(bias, t, sinker, "bias.@{}".format(t))
-
-        # fixme use corr bvecs
-        for t in fsl.Eddy().output_spec.class_editable_traits():
-            wf.connect(eddy, t, sinker, "eddy.@{}".format(t))
-
-        # fixme last output
-        wf.connect(bias, "out_file", dwi_preprocessed, "dwi")
-
-    else:
-        raise Exception("prep_pipe arg invalid {}".format(prep_pipe))
-
-    wf.connect(dwi_preprocessed, "dwi", sinker, "dwi_preprocessed")
-
-    # TENSOR FIT
-    dtifit = Node(interface=fsl.DTIFit(), name='dtifit')
-    wf.connect(dwi_preprocessed, "dwi", dtifit, "dwi")
-    wf.connect(dwi_preprocessed, 'mask', dtifit, 'mask')
-    wf.connect(selectfiles, 'bvec', dtifit, 'bvecs')
-    wf.connect(selectfiles, 'bval', dtifit, 'bvals')
-
+    ########################
+    # Tensor fit
+    ########################
     # mrtrix tensor fit
     tensor = Node(Dwi2tensor(), "tensor")
     wf.connect(dwi_preprocessed, "dwi", tensor, "in_file")
     wf.connect(dwi_preprocessed, 'mask', tensor, 'mask_file')
-    wf.connect(selectfiles, 'bvec', tensor, 'bvec')
-    wf.connect(selectfiles, 'bval', tensor, 'bval')
+    wf.connect(dwi_preprocessed, 'bvec', tensor, 'bvec')
+    wf.connect(dwi_preprocessed, 'bval', tensor, 'bval')
 
-    mrtrix_fit = Node(Tensor2metric(), "mrtrix_fit")
-    wf.connect(tensor, "out_file", mrtrix_fit, "in_file")
+    tensor_metrics = Node(Tensor2metric(), "tensor_metrics")
+    wf.connect(tensor, "out_file", tensor_metrics, "in_file")
     for t in Tensor2metric().output_spec.class_editable_traits():
-        wf.connect(mrtrix_fit, t, sinker, "mrtrix_fit.@{}".format(t))
+        wf.connect(tensor_metrics, t, sinker_preproc, "tensor_metrics.@{}".format(t))
 
-    ensure_list = JoinNode(interface=Function(input_names=["filename"],
-                                              output_names=["out_files"],
-                                              function=filename_to_list),
-                           joinsource="sessions_interface",
-                           joinfield="filename",
-                           name="ensure_list")
-    wf.connect(mrtrix_fit, "out_file_fa", ensure_list, "filename")
-
-    # TBSS
-    tbss = dmri.fsl.tbss.create_tbss_all("tbss")
-    tbss.inputs.inputnode.skeleton_thresh = 0.2
-    wf.connect(ensure_list, "out_files", tbss, "inputnode.fa_list")
-
-    ren_fa = Node(Rename(format_string="%(subject_id)s_mean_FA"), "ren_fa")
-    ren_fa.inputs.subject_id = subject
-    ren_fa.inputs.keep_ext = True
-    wf.connect(tbss, "outputnode.meanfa_file", ren_fa, "in_file")
-
-    ren_mergefa = Node(Rename(format_string="%(subject_id)s_merged_FA"), "ren_mergefa")
-    ren_mergefa.inputs.subject_id = subject
-    ren_mergefa.inputs.keep_ext = True
-    wf.connect(tbss, "outputnode.mergefa_file", ren_mergefa, "in_file")
-
-    ren_projfa = Node(Rename(format_string="%(subject_id)s_projected_FA"), "ren_projfa")
-    ren_projfa.inputs.subject_id = subject
-    ren_projfa.inputs.keep_ext = True
-    wf.connect(tbss, "outputnode.projectedfa_file", ren_projfa, "in_file")
-
-    ren_skel = Node(Rename(format_string="%(subject_id)s_skeleton_mask"), "ren_skel")
-    ren_skel.inputs.subject_id = subject
-    ren_skel.inputs.keep_ext = True
-    wf.connect(tbss, "outputnode.skeleton_mask", ren_skel, "in_file")
-
-    # ds
-    wf.connect(ren_fa, "out_file", sinker, "@mean_fa")
-    wf.connect(ren_mergefa, "out_file", sinker, "@merged_fa")
-    wf.connect(ren_projfa, "out_file", sinker, "@projected_fa")
-    wf.connect(ren_skel, "out_file", sinker, "@skeleton")
-
-    # ANTS REG
-    ants_reg_quick = Node(AntsRegistrationSynQuick(), "ants_reg_quick")
-    wf.connect(mrtrix_fit, "out_file_fa", ants_reg_quick, "in_file")
-    ants_reg_quick.inputs.template_file = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
-    ants_reg_quick.inputs.output_prefix = "MNI"  # fixme
-    ants_reg_quick.inputs.num_threads = 2  # fixme
-
-    ants_reg = Node(AntsRegistrationSyn(), "ants_reg")
-    wf.connect(mrtrix_fit, "out_file_fa", ants_reg, "in_file")
+    ########################
+    # MNI
+    ########################
+    # # ANTS REG
+    ants_reg = Node(AntsRegistrationSynQuick() if ants_quick else AntsRegistrationSyn(), "ants_reg")
+    wf.connect(tensor_metrics, "out_file_fa", ants_reg, "in_file")
     ants_reg.inputs.template_file = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
-    ants_reg.inputs.output_prefix = "MNI"  # fixme
-    ants_reg.inputs.num_threads = args.n_cpus  # fixme
-    # fixme
-    for t in AntsRegistrationSyn().output_spec.class_editable_traits():
-        wf.connect(ants_reg, t, sinker, "antsreg_nonquick.@{}".format(t))
+    ants_reg.inputs.num_threads = n_cpus_big_jobs
+    wf.connect(format_subject_session, "subject_session_prefix", ants_reg, "output_prefix")
+
+    wf.connect(ants_reg, "out_matrix", sinker_preproc, "mni_transformation.@out_matrix")
+    wf.connect(ants_reg, "forward_warp_field", sinker_preproc, "mni_transformation.@forward_warp_field")
 
     def make_trasform_list_fct(linear, warp):
         return [warp, linear]
 
-    make_trasform_list = Node(Function(input_names=["linear", "warp"],
-                                       output_names=["out_list"],
-                                       function=make_trasform_list_fct),
-                              "make_trasform_list")
-    wf.connect(ants_reg, "out_matrix", make_trasform_list, "linear")
-    wf.connect(ants_reg, "forward_warp_field", make_trasform_list, "warp")
+    make_transform_list = Node(Function(input_names=["linear", "warp"],
+                                        output_names=["out_list"],
+                                        function=make_trasform_list_fct),
+                               "make_transform_list")
+    wf.connect(ants_reg, "out_matrix", make_transform_list, "linear")
+    wf.connect(ants_reg, "forward_warp_field", make_transform_list, "warp")
 
-    transform_FA = Node(ants.resampling.ApplyTransforms(), "transform_FA")
-    transform_FA.inputs.reference_image = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
-    wf.connect(mrtrix_fit, "out_file_fa", transform_FA, "input_image")
-    wf.connect(make_trasform_list, "out_list", transform_FA, "transforms")
+    # now transform all metrics to MNI
+    transform_fa = Node(ants.resampling.ApplyTransforms(), "transform_fa")
+    transform_fa.inputs.out_postfix = "_mni"
+    transform_fa.inputs.reference_image = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
+    wf.connect(make_transform_list, "out_list", transform_fa, "transforms")
+    wf.connect(tensor_metrics, "out_file_fa", transform_fa, "input_image")
+    wf.connect(transform_fa, "output_image", sinker_preproc, "tensor_metrics_mni.@transform_fa")
 
-    def reg_plot_fct(in_file, template_file, subject, session=""):
+    transform_md = Node(ants.resampling.ApplyTransforms(), "transform_md")
+    transform_md.inputs.out_postfix = "_mni"
+    transform_md.inputs.reference_image = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
+    wf.connect(make_transform_list, "out_list", transform_md, "transforms")
+    wf.connect(tensor_metrics, "out_file_md", transform_md, "input_image")
+    wf.connect(transform_md, "output_image", sinker_preproc, "tensor_metrics_mni.@transform_md")
+
+    transform_ad = Node(ants.resampling.ApplyTransforms(), "transform_ad")
+    transform_ad.inputs.out_postfix = "_mni"
+    transform_ad.inputs.reference_image = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
+    wf.connect(make_transform_list, "out_list", transform_ad, "transforms")
+    wf.connect(tensor_metrics, "out_file_ad", transform_ad, "input_image")
+    wf.connect(transform_ad, "output_image", sinker_preproc, "tensor_metrics_mni.@transform_ad")
+
+    transform_rd = Node(ants.resampling.ApplyTransforms(), "transform_rd")
+    transform_rd.inputs.out_postfix = "_mni"
+    transform_rd.inputs.reference_image = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
+    wf.connect(make_transform_list, "out_list", transform_rd, "transforms")
+    wf.connect(tensor_metrics, "out_file_rd", transform_rd, "input_image")
+    wf.connect(transform_rd, "output_image", sinker_preproc, "tensor_metrics_mni.@transform_rd")
+
+    def reg_plot_fct(in_file, template_file, subject_session):
         from nilearn import plotting
         import os
-        if session:
-            sub_str = "sub-{}_ses-{}".format(subject, session)
-        else:
-            sub_str = "sub-{}".format(subject)
-        out_file = os.path.abspath(sub_str + "_reg.png")
-        display = plotting.plot_anat(in_file, title=sub_str)
+        out_file_reg = os.path.abspath(subject_session + "_reg.pdf")
+        display = plotting.plot_anat(in_file, title=subject_session)
         display.add_edges(template_file)
-        display.savefig(out_file)
-        return out_file
+        display.savefig(out_file_reg)
 
-    reg_plot = Node(Function(input_names=["in_file", "template_file", "subject", "session"],
-                             output_names=["out_file"],
+        out_file_tract = os.path.abspath(subject_session + "_tract.pdf")
+        display = plotting.plot_anat(in_file, title=subject_session)
+        display.add_contours(template_file)
+        display.savefig(out_file_tract)
+        return out_file_reg, out_file_tract
+
+    reg_plot = Node(Function(input_names=["in_file", "template_file", "subject_session"],
+                             output_names=["out_file_reg", "out_file_tract"],
                              function=reg_plot_fct),
                     "reg_plot")
-    wf.connect(transform_FA, "", reg_plot, "in_file")
+    wf.connect(transform_fa, "output_image", reg_plot, "in_file")
     reg_plot.inputs.template_file = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
-    reg_plot.inputs.subject = subject
+    wf.connect(format_subject_session, "subject_session_label", reg_plot, "subject_session")
+    wf.connect(reg_plot, "out_file_reg", sinker_regplots, "regplots")
+    wf.connect(reg_plot, "out_file_tract", sinker_regplots, "tractplots")
 
-    # fixme
-    # extract = Node(Function(input_names=["tbss_file", "subject", "sessions"],
-    #                         output_names=["out_file"],
-    #                         function=extract_jhu),
-    #                "extract")
-    # extract.inputs.subject = subject
-    # extract.inputs.sessions = sessions
-    # wf.connect(ren_mergefa, "out_file", extract, "tbss_file")
-    #
-    #
-    # wf.connect(extract, "out_file", sinker2, "@extracted")
+    def concat_filenames_fct(in_file_fa, in_file_md, in_file_ad, in_file_rd):
+        return [in_file_fa, in_file_md, in_file_ad, in_file_rd]
 
-    # fixme
-    # # export sessions
-    # def export_sessions_fct(sessions):
-    #     out_file = os.path.abspath("sessions.txt")
-    #     with open(out_file, "w") as fi:
-    #         fi.write("\n".join(sessions))
-    #     return out_file
-    #
-    # export_sessions = Node(Function(input_names=["sessions"], output_names=["out_file"],
-    #                                 function=export_sessions_fct),
-    #                        name="export_sessions")
-    # export_sessions.inputs.sessions = sessions
-    # wf.connect(export_sessions, "out_file", sinker, "@sessions")
+    concat_filenames = Node(Function(input_names=["in_file_fa", "in_file_md", "in_file_ad", "in_file_rd"],
+                                     output_names=["out_list"],
+                                     function=concat_filenames_fct),
+                            "concat_filenames")
+    metrics_labels = ["fa", "md", "ad", "rd"]
+    wf.connect(transform_fa, "output_image", concat_filenames, "in_file_fa")
+    wf.connect(transform_md, "output_image", concat_filenames, "in_file_md")
+    wf.connect(transform_ad, "output_image", concat_filenames, "in_file_ad")
+    wf.connect(transform_rd, "output_image", concat_filenames, "in_file_rd")
+
+    merge = Node(fsl.Merge(), "merge")
+    merge.inputs.dimension = "t"
+    wf.connect(concat_filenames, "out_list", merge, "in_files")
+
+    extract = Node(Function(input_names=["in_file", "metric_labels", "subject", "session"],
+                            output_names=["out_file"],
+                            function=extract_jhu),
+                   "extract")
+    extract.inputs.subject = subject
+    extract.inputs.metric_labels = metrics_labels
+    wf.connect(sessions_interface, "session", extract, "session")
+    wf.connect(merge, "merged_file", extract, "in_file")
+    wf.connect(extract, "out_file", sinker_extracted, "extracted_metrics")
 
     return wf
 
 
-# set up acq for eddy
-if "lhab" in subject:
-    acq_str = "0 1 0 {TotalReadoutTime}"
-elif "CC" in subject:
-    acq_str = "0 -1 0 0.0684"
-else:
-    raise ("Cannot determine study")
+if args.analysis_level == "participant":
+    if not args.wf_base_dir:
+        wf_dir = "/scratch"
+    else:
+        wf_dir = args.wf_base_dir
 
-wfs = []
-wfs.append(run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="old_fsl"))
-wfs.append(run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str=acq_str))
+    # get sessions
+    layout = BIDSLayout(args.bids_dir)
+    sessions = layout.get_sessions(subject=subject, modality="dwi")
+    sessions.sort()
 
-wf = Workflow(name=subject)
-wf.base_dir = wf_dir
-wf.config['execution']['crashdump_dir'] = os.path.join(args.output_dir, "crash")
+    # set up acq for eddy
+    if "lhab" in subject:
+        acq_str = "0 1 0 {TotalReadoutTime}"
+    elif "CC" in subject:
+        acq_str = "0 -1 0 0.0684"
+    else:
+        raise ("Cannot determine study")
 
-wf.add_nodes(wfs)
-wf.write_graph(graph2use='colored')
+    wfs = []
+    if args.ants_reg_quick:
+        print("Use AntsRegistrationSynQuick for registration")
+    else:
+        print("Use AntsRegistrationSyn for registration")
 
-wf.run(plugin='MultiProc', plugin_args={'n_procs': args.n_cpus})
+    wfs.append(run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str=acq_str,
+                               ants_quick=args.ants_reg_quick))
+
+    wf = Workflow(name=subject)
+    wf.base_dir = wf_dir
+    wf.config['execution']['crashdump_dir'] = os.path.join(args.output_dir, "crash")
+
+    wf.add_nodes(wfs)
+    wf.write_graph(graph2use='colored')
+
+    try:
+        wf.run(plugin='MultiProc', plugin_args={'n_procs': args.n_cpus})
+    except:
+        print("Something went wrong")
+        dump_dir = os.path.join(args.output_dir, "crash_dump_wdir", subject)
+        shutil.copytree(os.path.join(wf_dir, subject), dump_dir)
+        print("Copy working directory to " + dump_dir)
+
+elif args.analysis_level == "group":
+    output_dir = os.path.join(args.output_dir, "00_group")
+    extracted_dir = os.path.join(args.output_dir, "extracted_metrics")
+    preprocessed_dir = os.path.join(args.output_dir, "dwi_preprocessed")
+
+    if not os.path.isdir(output_dir):
+        os.makedirs(output_dir)
+    csv_files = glob(os.path.join(extracted_dir, "*_jhu_extracted.csv"))
+    csv_files.sort()
+    print("Concat {} files \n".format(len(csv_files)) + " ".join(csv_files))
+    df_list = list(map(pd.read_csv, csv_files))
+    df = pd.concat(df_list)
+    df.reset_index(drop=True, inplace=True)
+    extracted_file = os.path.join(output_dir, "jhu_extracted.csv")
+    df.to_csv(extracted_file, index=False)
+    print("Writing to " + extracted_file)
+
+    # motion files
+    ses = glob(os.path.join(preprocessed_dir, "sub-*", "ses-*"))
+    ses_str = "ses-*" if ses else ""
+    motion_file_search = os.path.join(preprocessed_dir, "sub-*", ses_str, "dwi/eddy/*.eddy_restricted_movement_rms")
+    csv_files = glob(motion_file_search)
+    print("Concat {} files \n".format(len(csv_files)) + " ".join(csv_files))
+    df = pd.DataFrame([])
+    for file in csv_files:
+        subject = re.findall("/sub-(\w*)/", file)[0]
+        ses_find = re.findall("/ses-(\w*)/", file)
+        session = ses_find[0] if ses_find else ""
+        df_ = pd.read_csv(file, sep="  ", header=None, names=["rms_movement_vs_first", "rms_movement_vs_previous"],
+                          engine='python')
+        df_["subject"] = subject
+        df_["session"] = session
+        df = df.append(df_)
+
+    m = df.groupby(["subject", "session"]).mean()
+    motion_file = os.path.join(output_dir, "mean_restricted_movement_rms.csv")
+    print("Writing to " + motion_file)
+    m.to_csv(motion_file)
