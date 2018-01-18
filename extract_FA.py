@@ -449,7 +449,7 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     bias = Node(Dwibiascorrect(), "bias")
     wf.connect(eddy, "out_corrected", bias, "in_file")
     wf.connect(selectfiles, "bval", bias, "bval")
-    wf.connect(selectfiles, "bvec", bias, "bvec")
+    wf.connect(eddy, "out_rotated_bvecs", bias, "bvec")
     wf.connect(bias, "out_bias_file", sinker_preproc, "qa.@bias")
 
     mask = Node(Dwi2mask(), "mask")
