@@ -561,7 +561,7 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     wf.connect(tensor_metrics, "out_file_rd", transform_rd, "input_image")
     wf.connect(transform_rd, "output_image", sinker_preproc, "tensor_metrics_mni.@transform_rd")
 
-    def reg_plot_fct(in_file, template_file, subject_session):
+    def reg_plot_fct(in_file, template_file, atlas_file, subject_session):
         from nilearn import plotting
         import os
         out_file_reg = os.path.abspath(subject_session + "_reg.pdf")
@@ -571,16 +571,18 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
 
         out_file_tract = os.path.abspath(subject_session + "_tract.pdf")
         display = plotting.plot_anat(in_file, title=subject_session)
-        display.add_contours(template_file)
+        display.add_contours(atlas_file)
         display.savefig(out_file_tract)
         return out_file_reg, out_file_tract
 
-    reg_plot = Node(Function(input_names=["in_file", "template_file", "subject_session"],
+    reg_plot = Node(Function(input_names=["in_file", "template_file", "atlas_file", "subject_session"],
                              output_names=["out_file_reg", "out_file_tract"],
                              function=reg_plot_fct),
                     "reg_plot")
     wf.connect(transform_fa, "output_image", reg_plot, "in_file")
     reg_plot.inputs.template_file = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
+    reg_plot.inputs.atlas_file = os.path.join(os.environ["FSLDIR"], "data/atlases",
+                                              "JHU/JHU-ICBM-tracts-maxprob-thr25-2mm.nii.gz")
     wf.connect(format_subject_session, "subject_session_label", reg_plot, "subject_session")
     wf.connect(reg_plot, "out_file_reg", sinker_plots, "regplots")
     wf.connect(reg_plot, "out_file_tract", sinker_plots, "tractplots")
