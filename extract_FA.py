@@ -653,6 +653,17 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     merge.inputs.dimension = "t"
     wf.connect(concat_filenames, "out_list", merge, "in_files")
 
+
+    # create an fa mask
+    fa_mask = Node(fsl.Threshold(), "fa_mask")
+    wf.connect(transform_fa, "output_image", fa_mask, "in_file")
+    fa_mask.inputs.thresh = 0.2
+    fa_mask.inputs.args = "-bin"
+
+    merge_masked = Node(fsl.ApplyMask(), "merge_masked")
+    wf.connect(merge, "merged_file", merge_masked, "in_file")
+    wf.connect(fa_mask, "out_file", merge_masked, "mask_file")
+
     extract = Node(Function(input_names=["in_file", "metric_labels", "subject", "session", "atlas"],
                             output_names=["out_file"],
                             function=extract_jhu),
@@ -660,7 +671,7 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     extract.inputs.subject = subject
     extract.inputs.metric_labels = metrics_labels
     wf.connect(sessions_interface, "session", extract, "session")
-    wf.connect(merge, "merged_file", extract, "in_file")
+    wf.connect(merge_masked, "out_file", extract, "in_file")
     wf.connect(atlas_interface, "atlas", extract, "atlas")
 
     wf.connect(extract, "out_file", sinker_extracted, "extracted_metrics")
