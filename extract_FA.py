@@ -225,21 +225,30 @@ def prepare_eddy_textfiles_fct(bval_file, acq_str, json_file=""):
 
 ###
 
-def extract_jhu(in_file, metric_labels, subject, session):
+def extract_jhu(in_file, metric_labels, subject, session, atlas):
     # takes 4d file with metrics
     import os
     import pandas as pd
     from nilearn.input_data import NiftiLabelsMasker
+    from nilearn import image
+    import numpy as np
     import sys
     if sys.version_info[0] < 3:
         from StringIO import StringIO
     else:
         from io import StringIO
 
-    atlas_file = os.path.join(os.environ["FSLDIR"], "data/atlases", "JHU/JHU-ICBM-tracts-maxprob-thr25-2mm.nii.gz")
+    if atlas == "JHU25":
+        thr = 25
+    elif atlas == "JHU50":
+        thr = 50
+    else:
+        raise Exception("Atlas unknown " + atlas)
+
+    atlas_file = os.path.join(os.environ["FSLDIR"], "data/atlases", "JHU/JHU-ICBM-tracts-maxprob-thr{"
+                                                                    "}-1mm.nii.gz".format(thr))
 
     # JHU-tracts.xml
-    # index + 1!
     jhu_txt = StringIO("""
     indx;x;y;z;label
     0;98;117;75;Anterior thalamic radiation L
@@ -263,8 +272,15 @@ def extract_jhu(in_file, metric_labels, subject, session):
     18;140;89;61;Superior longitudinal fasciculus (temporal part) L
     19;52;116;103;Superior longitudinal fasciculus (temporal part) R
     """)
-
     df = pd.read_csv(jhu_txt, sep=";")
+    df["indx"] += 1
+
+    roi_indices = np.unique(image.load_img(atlas_file).dataobj)
+    # since the atlases with higher thersholds do not have all regions, we need to select the regoins included in the
+    # atlas first
+    df = df[df.indx.isin(roi_indices)]
+
+
     masker = NiftiLabelsMasker(labels_img=atlas_file)
 
     extracted = masker.fit_transform(in_file)
@@ -276,7 +292,7 @@ def extract_jhu(in_file, metric_labels, subject, session):
 
     subject_sessions_str = "sub-{subject}_ses-{session}".format(subject=subject, session=session) if session else \
         "sub-{subject}".format(subject=subject)
-    out_file = os.path.abspath("{}_jhu_extracted.csv".format(subject_sessions_str))
+    out_file = os.path.abspath("{}_atlas-{}_extracted.csv".format(subject_sessions_str, atlas))
     data.to_csv(out_file, index=False)
 
     return out_file
@@ -334,6 +350,10 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     else:
         n_cpus_big_jobs = args.n_cpus
     n_cpus_big_jobs = 1 if n_cpus_big_jobs < 1 else n_cpus_big_jobs
+
+    template_file = os.path.join(os.environ["FSLDIR"], "data/atlases", "JHU/JHU-ICBM-FA-1mm.nii.gz")
+
+
     ########################
     # INPUT
     ########################
@@ -515,7 +535,9 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     # # ANTS REG
     ants_reg = Node(AntsRegistrationSynQuick() if ants_quick else AntsRegistrationSyn(), "ants_reg")
     wf.connect(tensor_metrics, "out_file_fa", ants_reg, "in_file")
-    ants_reg.inputs.template_file = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
+    ants_reg.inputs.template_file = template_file
+
+
     ants_reg.inputs.num_threads = n_cpus_big_jobs
     wf.connect(format_subject_session, "subject_session_prefix", ants_reg, "output_prefix")
 
@@ -535,57 +557,85 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     # now transform all metrics to MNI
     transform_fa = Node(ants.resampling.ApplyTransforms(), "transform_fa")
     transform_fa.inputs.out_postfix = "_mni"
-    transform_fa.inputs.reference_image = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
+    transform_fa.inputs.reference_image = template_file
     wf.connect(make_transform_list, "out_list", transform_fa, "transforms")
     wf.connect(tensor_metrics, "out_file_fa", transform_fa, "input_image")
     wf.connect(transform_fa, "output_image", sinker_preproc, "tensor_metrics_mni.@transform_fa")
 
     transform_md = Node(ants.resampling.ApplyTransforms(), "transform_md")
     transform_md.inputs.out_postfix = "_mni"
-    transform_md.inputs.reference_image = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
+    transform_md.inputs.reference_image = template_file
     wf.connect(make_transform_list, "out_list", transform_md, "transforms")
     wf.connect(tensor_metrics, "out_file_md", transform_md, "input_image")
     wf.connect(transform_md, "output_image", sinker_preproc, "tensor_metrics_mni.@transform_md")
 
     transform_ad = Node(ants.resampling.ApplyTransforms(), "transform_ad")
     transform_ad.inputs.out_postfix = "_mni"
-    transform_ad.inputs.reference_image = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
+    transform_ad.inputs.reference_image = template_file
     wf.connect(make_transform_list, "out_list", transform_ad, "transforms")
     wf.connect(tensor_metrics, "out_file_ad", transform_ad, "input_image")
     wf.connect(transform_ad, "output_image", sinker_preproc, "tensor_metrics_mni.@transform_ad")
 
     transform_rd = Node(ants.resampling.ApplyTransforms(), "transform_rd")
     transform_rd.inputs.out_postfix = "_mni"
-    transform_rd.inputs.reference_image = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
+    transform_rd.inputs.reference_image = template_file
     wf.connect(make_transform_list, "out_list", transform_rd, "transforms")
     wf.connect(tensor_metrics, "out_file_rd", transform_rd, "input_image")
     wf.connect(transform_rd, "output_image", sinker_preproc, "tensor_metrics_mni.@transform_rd")
 
-    def reg_plot_fct(in_file, template_file, atlas_file, subject_session):
+    def reg_plot_fct(in_file, template_file, subject_session):
         from nilearn import plotting
         import os
         out_file_reg = os.path.abspath(subject_session + "_reg.pdf")
         display = plotting.plot_anat(in_file, title=subject_session)
         display.add_edges(template_file)
         display.savefig(out_file_reg)
+        return out_file_reg
 
-        out_file_tract = os.path.abspath(subject_session + "_tract.pdf")
+    def tract_plot_fct(in_file, subject_session, atlas):
+        from nilearn import plotting
+        import os
+
+        if atlas == "JHU25":
+            thr = 25
+        elif atlas == "JHU50":
+            thr = 50
+        else:
+            raise Exception("Atlas unknown " + atlas)
+
+        atlas_file = os.path.join(os.environ["FSLDIR"], "data/atlases", "JHU/JHU-ICBM-tracts-maxprob-thr{"
+                                                                        "}-1mm.nii.gz".format(thr))
+
+        out_file_tract = os.path.abspath(subject_session + "_atlas-{}_tract.pdf".format(atlas))
         display = plotting.plot_anat(in_file, title=subject_session)
         display.add_contours(atlas_file)
         display.savefig(out_file_tract)
-        return out_file_reg, out_file_tract
+        return out_file_tract
 
-    reg_plot = Node(Function(input_names=["in_file", "template_file", "atlas_file", "subject_session"],
-                             output_names=["out_file_reg", "out_file_tract"],
+
+    atlas_interface = Node(IdentityInterface(fields=["atlas"]), "atlas_interface")
+    atlas_interface.iterables = ("atlas", ["JHU25", "JHU50"])
+
+    reg_plot = Node(Function(input_names=["in_file", "template_file", "subject_session"],
+                             output_names=["out_file_reg"],
                              function=reg_plot_fct),
                     "reg_plot")
     wf.connect(transform_fa, "output_image", reg_plot, "in_file")
-    reg_plot.inputs.template_file = fsl.Info.standard_image("FMRIB58_FA_1mm.nii.gz")
-    reg_plot.inputs.atlas_file = os.path.join(os.environ["FSLDIR"], "data/atlases",
-                                              "JHU/JHU-ICBM-tracts-maxprob-thr25-2mm.nii.gz")
+    reg_plot.inputs.template_file = template_file
     wf.connect(format_subject_session, "subject_session_label", reg_plot, "subject_session")
     wf.connect(reg_plot, "out_file_reg", sinker_plots, "regplots")
-    wf.connect(reg_plot, "out_file_tract", sinker_plots, "tractplots")
+
+
+
+    tract_plot = Node(Function(input_names=["in_file", "subject_session", "atlas"],
+                             output_names=["out_file_tract"],
+                             function=tract_plot_fct),
+                    "tract_plot")
+    wf.connect(transform_fa, "output_image", tract_plot, "in_file")
+    wf.connect(format_subject_session, "subject_session_label", tract_plot, "subject_session")
+    wf.connect(atlas_interface, "atlas", tract_plot, "atlas")
+    wf.connect(tract_plot, "out_file_tract", sinker_plots, "tractplots")
+
 
     def concat_filenames_fct(in_file_fa, in_file_md, in_file_ad, in_file_rd):
         return [in_file_fa, in_file_md, in_file_ad, in_file_rd]
@@ -604,7 +654,7 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     merge.inputs.dimension = "t"
     wf.connect(concat_filenames, "out_list", merge, "in_files")
 
-    extract = Node(Function(input_names=["in_file", "metric_labels", "subject", "session"],
+    extract = Node(Function(input_names=["in_file", "metric_labels", "subject", "session", "atlas"],
                             output_names=["out_file"],
                             function=extract_jhu),
                    "extract")
@@ -612,6 +662,8 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     extract.inputs.metric_labels = metrics_labels
     wf.connect(sessions_interface, "session", extract, "session")
     wf.connect(merge, "merged_file", extract, "in_file")
+    wf.connect(atlas_interface, "atlas", extract, "atlas")
+
     wf.connect(extract, "out_file", sinker_extracted, "extracted_metrics")
 
     return wf
@@ -667,15 +719,16 @@ elif args.analysis_level == "group":
 
     if not os.path.isdir(output_dir):
         os.makedirs(output_dir)
-    csv_files = glob(os.path.join(extracted_dir, "*_jhu_extracted.csv"))
-    csv_files.sort()
-    print("Concat {} files \n".format(len(csv_files)) + " ".join(csv_files))
-    df_list = list(map(pd.read_csv, csv_files))
-    df = pd.concat(df_list)
-    df.reset_index(drop=True, inplace=True)
-    extracted_file = os.path.join(output_dir, "jhu_extracted.csv")
-    df.to_csv(extracted_file, index=False)
-    print("Writing to " + extracted_file)
+    for atlas in ["JHU25", "JHU50"]:
+        csv_files = glob(os.path.join(extracted_dir, "*_atlas-{}_extracted.csv".format(atlas)))
+        csv_files.sort()
+        print("Concat {} files \n".format(len(csv_files)) + " ".join(csv_files))
+        df_list = list(map(pd.read_csv, csv_files))
+        df = pd.concat(df_list)
+        df.reset_index(drop=True, inplace=True)
+        extracted_file = os.path.join(output_dir, "atlas-{}_extracted.csv".format(atlas))
+        df.to_csv(extracted_file, index=False)
+        print("Writing to " + extracted_file)
 
     # motion files
     ses = glob(os.path.join(preprocessed_dir, "sub-*", "ses-*"))
