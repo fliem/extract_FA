@@ -249,8 +249,7 @@ def extract_jhu(in_file, metric_labels, subject, session, atlas):
                                                                     "}-1mm.nii.gz".format(thr))
 
     # JHU-tracts.xml
-    jhu_txt = StringIO("""
-    indx;x;y;z;label
+    jhu_txt = StringIO("""indx;x;y;z;label
     0;98;117;75;Anterior thalamic radiation L
     1;83;117;76;Anterior thalamic radiation R
     2;96;99;36;Corticospinal tract L
