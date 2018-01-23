@@ -51,8 +51,11 @@
 
    http://www.frontiersin.org/Journal/10.3389/fninf.2013.00039/abstract
 
+    Normalization to JHU-ICBM-FA-1mm.nii.gz
+
 
 ### extract metrics
+masked metrics with thresholded FA >.2 mask.
 Extracted mean values from ROIs defined in
-JHU/JHU-ICBM-tracts-maxprob-thr25-2mm.nii.gz (distributed with FSL).
+JHU/JHU-ICBM-tracts-maxprob-thr{25, 50}-1mm.nii.gz (distributed with FSL).
 Extraction with nilearn.NiftiLabelsMasker.
