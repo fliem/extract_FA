@@ -324,7 +324,7 @@ parser.add_argument('output_dir', help='The directory where the output files '
 parser.add_argument('analysis_level', help='Level of the analysis that will be performed. ',
                     choices=['participant', 'group'])
 parser.add_argument('--wf_base_dir', help="wf base directory")
-parser.add_argument('--participant_label',
+parser.add_argument('--participant_label', nargs="+",
                     help='The label of the participant that should be analyzed. The label '
                          'corresponds to sub-<participant_label> from the BIDS spec '
                          '(so it does not include "sub-"). If this parameter is not '
@@ -684,6 +684,11 @@ if args.analysis_level == "participant":
         wf_dir = "/scratch"
     else:
         wf_dir = args.wf_base_dir
+
+    if len(subject) != 1:
+        raise Exception("Exactly one subjects needs to be specified {}".format(subject))
+    else:
+        subject = subject[0]
 
     # get sessions
     layout = BIDSLayout(args.bids_dir)
