@@ -726,6 +726,7 @@ if args.analysis_level == "participant":
         dump_dir = os.path.join(args.output_dir, "crash_dump_wdir", subject)
         shutil.copytree(os.path.join(wf_dir, subject), dump_dir)
         print("Copy working directory to " + dump_dir)
+        raise Exception()
 
 elif args.analysis_level == "group":
     output_dir = os.path.join(args.output_dir, "00_group")
