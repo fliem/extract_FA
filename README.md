@@ -59,3 +59,7 @@ masked metrics with thresholded FA >.2 mask.
 Extracted mean values from ROIs defined in
 JHU/JHU-ICBM-tracts-maxprob-thr{25, 50}-1mm.nii.gz (distributed with FSL).
 Extraction with nilearn.NiftiLabelsMasker.
+
+# Changes
+* v2.1 initial
+* v2.2 fixed raise if processing fails
