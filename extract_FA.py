@@ -475,7 +475,8 @@ def run_process_dwi(wf_dir, subject, sessions, args, study, prep_pipe="mrtrix", 
                      ("_tensor", ""),
                      ('.eddy_rotated_bvecs', '.bvec'),
                      ('_acq-ap_run-1_dwi', ''),
-                     ("_dwi", "")
+                     ("_dwi", ""),
+                     ("_b0s_mean_brain", "")
                      ]
     sinker_preproc.inputs.substitutions = substitutions
 
