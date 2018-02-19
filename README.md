@@ -29,8 +29,12 @@
 
     If using -ants option: Tustison, N.; Avants, B.; Cook, P.; Zheng, Y.; Egan, A.; Yushkevich, P. & Gee, J. N4ITK: Improved N3 Bias Correction. IEEE Transactions on Medical Imaging, 2010, 29, 1310-1320
 
-* Dwi2mask
+
+* Mask
+    * Dwi2mask for lhab
     Dhollander T, Raffelt D, Connelly A. Unsupervised 3-tissue response function estimation from single-shell or multi-shell diffusion MR data without a co-registered T1 image. ISMRM Workshop on Breaking the Barriers of Diffusion MRI, 2016, 5.
+
+    * FSL's BET for camcan, as this produced better results
 
 ### Tensor fit
 * Dwi2tensor
@@ -63,3 +67,4 @@ Extraction with nilearn.NiftiLabelsMasker.
 # Changes
 * v2.1 initial
 * v2.2 fixed raise if processing fails
+* v3 camcan: fsl bet for mask
