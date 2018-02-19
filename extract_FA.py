@@ -551,9 +551,9 @@ def run_process_dwi(wf_dir, subject, sessions, args, study, prep_pipe="mrtrix", 
 
     elif masking_algo == "bet":
         mask = create_bet_mask_from_dwi(name="mask", do_realignment=False)
-        wf.connect(bias, "out_file", mask, "in_file")
-        wf.connect(selectfiles, "bvec", mask, "bvec")
-        wf.connect(selectfiles, "bval", mask, "bval")
+        wf.connect(bias, "out_file", mask, "inputnode.dwi")
+        wf.connect(selectfiles, "bvec", mask, "inputnode.bvec")
+        wf.connect(selectfiles, "bval", mask, "inputnode.bval")
 
     # output eddy text files
     eddy_out = fsl.Eddy().output_spec.class_editable_traits()
