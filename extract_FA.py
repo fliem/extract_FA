@@ -279,7 +279,6 @@ def extract_jhu(in_file, metric_labels, subject, session, atlas):
     # atlas first
     df = df[df.indx.isin(roi_indices)]
 
-
     masker = NiftiLabelsMasker(labels_img=atlas_file)
 
     extracted = masker.fit_transform(in_file)
@@ -351,7 +350,6 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     n_cpus_big_jobs = 1 if n_cpus_big_jobs < 1 else n_cpus_big_jobs
 
     template_file = os.path.join(os.environ["FSLDIR"], "data/atlases", "JHU/JHU-ICBM-FA-1mm.nii.gz")
-
 
     ########################
     # INPUT
@@ -536,7 +534,6 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     wf.connect(tensor_metrics, "out_file_fa", ants_reg, "in_file")
     ants_reg.inputs.template_file = template_file
 
-
     ants_reg.inputs.num_threads = n_cpus_big_jobs
     wf.connect(format_subject_session, "subject_session_prefix", ants_reg, "output_prefix")
 
@@ -611,7 +608,6 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
         display.savefig(out_file_tract)
         return out_file_tract
 
-
     atlas_interface = Node(IdentityInterface(fields=["atlas"]), "atlas_interface")
     atlas_interface.iterables = ("atlas", ["JHU25", "JHU50"])
 
@@ -624,17 +620,14 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     wf.connect(format_subject_session, "subject_session_label", reg_plot, "subject_session")
     wf.connect(reg_plot, "out_file_reg", sinker_plots, "regplots")
 
-
-
     tract_plot = Node(Function(input_names=["in_file", "subject_session", "atlas"],
-                             output_names=["out_file_tract"],
-                             function=tract_plot_fct),
-                    "tract_plot")
+                               output_names=["out_file_tract"],
+                               function=tract_plot_fct),
+                      "tract_plot")
     wf.connect(transform_fa, "output_image", tract_plot, "in_file")
     wf.connect(format_subject_session, "subject_session_label", tract_plot, "subject_session")
     wf.connect(atlas_interface, "atlas", tract_plot, "atlas")
     wf.connect(tract_plot, "out_file_tract", sinker_plots, "tractplots")
-
 
     def concat_filenames_fct(in_file_fa, in_file_md, in_file_ad, in_file_rd):
         return [in_file_fa, in_file_md, in_file_ad, in_file_rd]
@@ -652,7 +645,6 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     merge = Node(fsl.Merge(), "merge")
     merge.inputs.dimension = "t"
     wf.connect(concat_filenames, "out_list", merge, "in_files")
-
 
     # create an fa mask
     fa_mask = Node(fsl.Threshold(), "fa_mask")
