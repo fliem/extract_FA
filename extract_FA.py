@@ -51,6 +51,29 @@ class Dwi2mask(CommandLine):
     output_spec = Dwi2maskOutputSpec
 
 
+class DwiextractB0InputSpec(CommandLineInputSpec):
+    in_file = File(desc="File", mandatory=True, argstr="%s", position=0, exists=True)
+    bvec = File(desc="File", mandatory=True, argstr="-fslgrad %s", position=-2, exists=True)
+    bval = File(desc="File", mandatory=True, argstr="%s", position=-1, exists=True)
+
+    out_file = File(argstr='%s', name_source=['in_file'], hash_files=False, name_template='%s_b0s',
+                    keep_extension=True, position=1, genfile=True)
+
+
+class DwiextractB0OutputSpec(TraitedSpec):
+    out_file = File(desc="file with b0s", exists=True)
+
+
+class DwiextractB0(CommandLine):
+    """
+    mrtrix3 dwi2mask command
+    http://mrtrix.readthedocs.io/en/latest/reference/commands/dwi2mask.html
+    """
+    _cmd = "dwiextract -info -bzero"
+    input_spec = DwiextractB0InputSpec
+    output_spec = DwiextractB0OutputSpec
+
+
 #
 class DwibiascorrectInputSpec(CommandLineInputSpec):
     in_file = File(desc="File", mandatory=True, argstr="%s", position=0, exists=True)
@@ -337,7 +360,40 @@ args = parser.parse_args()
 subject = args.participant_label
 
 
-def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str="", ants_quick=False):
+def create_bet_mask_from_dwi(name, do_realignment=True):
+    wf = Workflow(name=name)
+
+    inputnode = Node(interface=IdentityInterface(fields=["dwi", "bvec", "bval"]),
+                     name="inputnode")
+
+    b0s = Node(DwiextractB0(), "b0s")
+    wf.connect(inputnode, "dwi", b0s, "in_file")
+    wf.connect(inputnode, "bvec", b0s, "bvec")
+    wf.connect(inputnode, "bval", b0s, "bval")
+
+    meanb0 = Node(fsl.ImageMaths(op_string='-Tmean', suffix='_mean'), name="meanb0")
+    wf.connect(b0s, "out_file", meanb0, "in_file")
+
+    mcflirt = Node(fsl.MCFLIRT(), "mcflirt")
+
+    bet = Node(fsl.BET(), "bet")
+    bet.inputs.frac = 0.3
+    bet.inputs.robust = True
+    bet.inputs.mask = True
+
+    if do_realignment:
+        wf.connect(meanb0, "out_file", mcflirt, "in_file")
+        wf.connect(mcflirt, "out_file", bet, "in_file")
+    else:
+        wf.connect(meanb0, "out_file", bet, "in_file")
+
+    outputnode = Node(interface=IdentityInterface(fields=["mask_file"]), name="outputnode")
+    wf.connect(bet, "mask_file", outputnode, "mask_file")
+
+    return wf
+
+
+def run_process_dwi(wf_dir, subject, sessions, args, study, prep_pipe="mrtrix", acq_str="", ants_quick=False):
     wf_name = "dwi__prep_{}".format(prep_pipe)
     wf = Workflow(name=wf_name)
     wf.base_dir = wf_dir
@@ -350,6 +406,13 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     n_cpus_big_jobs = 1 if n_cpus_big_jobs < 1 else n_cpus_big_jobs
 
     template_file = os.path.join(os.environ["FSLDIR"], "data/atlases", "JHU/JHU-ICBM-FA-1mm.nii.gz")
+
+    if study == "lhab":
+        masking_algo = "mrtrix"
+    elif study == "camcan":
+        masking_algo = "bet"
+    else:
+        raise Exception("Study not known " + study)
 
     ########################
     # INPUT
@@ -443,13 +506,24 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     if use_json_file:
         wf.connect(selectfiles, "json", prepare_eddy_textfiles, "json_file")
 
-    init_mask = Node(Dwi2mask(), "init_mask")
-    wf.connect(denoise, "out_file", init_mask, "in_file")
-    wf.connect(selectfiles, "bvec", init_mask, "bvec")
-    wf.connect(selectfiles, "bval", init_mask, "bval")
-
     init_mask_dil = Node(Dilatemask(), "init_mask_dil")
-    wf.connect(init_mask, "out_mask_file", init_mask_dil, "in_file")
+
+    if masking_algo == "mrtrix":
+        init_mask = Node(Dwi2mask(), "init_mask")
+
+        wf.connect(denoise, "out_file", init_mask, "in_file")
+        wf.connect(selectfiles, "bvec", init_mask, "bvec")
+        wf.connect(selectfiles, "bval", init_mask, "bval")
+
+        wf.connect(init_mask, "out_mask_file", init_mask_dil, "in_file")
+    elif masking_algo == "bet":
+        init_mask = create_bet_mask_from_dwi(name="init_mask", do_realignment=True)
+
+        wf.connect(denoise, "out_file", init_mask, "inputnode.dwi")
+        wf.connect(selectfiles, "bvec", init_mask, "inputnode.bvec")
+        wf.connect(selectfiles, "bval", init_mask, "inputnode.bval")
+
+        wf.connect(init_mask, "outputnode.mask_file", init_mask_dil, "in_file")
 
     eddy = Node(fsl.Eddy(), "eddy")
     eddy.inputs.slm = "linear"
@@ -469,10 +543,17 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     wf.connect(eddy, "out_rotated_bvecs", bias, "bvec")
     wf.connect(bias, "out_bias_file", sinker_preproc, "qa.@bias")
 
-    mask = Node(Dwi2mask(), "mask")
-    wf.connect(bias, "out_file", mask, "in_file")
-    wf.connect(selectfiles, "bvec", mask, "bvec")
-    wf.connect(selectfiles, "bval", mask, "bval")
+    if masking_algo == "mrtrix":
+        mask = Node(Dwi2mask(), "mask")
+        wf.connect(bias, "out_file", mask, "in_file")
+        wf.connect(selectfiles, "bvec", mask, "bvec")
+        wf.connect(selectfiles, "bval", mask, "bval")
+
+    elif masking_algo == "bet":
+        mask = create_bet_mask_from_dwi(name="mask", do_realignment=False)
+        wf.connect(bias, "out_file", mask, "in_file")
+        wf.connect(selectfiles, "bvec", mask, "bvec")
+        wf.connect(selectfiles, "bval", mask, "bval")
 
     # output eddy text files
     eddy_out = fsl.Eddy().output_spec.class_editable_traits()
@@ -502,14 +583,18 @@ def run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str
     wf.connect(motion_plot, "out_file", sinker_plots, "motion")
 
     wf.connect(bias, "out_file", dwi_preprocessed, "dwi")
-    wf.connect(mask, "out_mask_file", dwi_preprocessed, "mask")
     wf.connect(eddy, "out_rotated_bvecs", dwi_preprocessed, "bvec")
     wf.connect(selectfiles, "bval", dwi_preprocessed, "bval")
+    if masking_algo == "mrtrix":
+        wf.connect(mask, "out_mask_file", dwi_preprocessed, "mask")
+    elif masking_algo == "bet":
+        wf.connect(mask, "outputnode.mask_file", dwi_preprocessed, "mask")
 
     wf.connect(dwi_preprocessed, "dwi", sinker_preproc, "dwi.@dwi")
     wf.connect(dwi_preprocessed, "bvec", sinker_preproc, "dwi.@bvec")
     wf.connect(dwi_preprocessed, "bval", sinker_preproc, "dwi.@bval")
     wf.connect(dwi_preprocessed, "mask", sinker_preproc, "dwi.@mask")
+
 
     ########################
     # Tensor fit
@@ -690,8 +775,10 @@ if args.analysis_level == "participant":
     # set up acq for eddy
     if "lhab" in subject:
         acq_str = "0 1 0 {TotalReadoutTime}"
+        study = "lhab"
     elif "CC" in subject:
         acq_str = "0 -1 0 0.0684"
+        study = "camcan"
     else:
         raise ("Cannot determine study")
 
@@ -701,7 +788,7 @@ if args.analysis_level == "participant":
     else:
         print("Use AntsRegistrationSyn for registration")
 
-    wfs.append(run_process_dwi(wf_dir, subject, sessions, args, prep_pipe="mrtrix", acq_str=acq_str,
+    wfs.append(run_process_dwi(wf_dir, subject, sessions, args, study, prep_pipe="mrtrix", acq_str=acq_str,
                                ants_quick=args.ants_reg_quick))
 
     wf = Workflow(name=subject)
