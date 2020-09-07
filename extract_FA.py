@@ -357,7 +357,7 @@ parser.add_argument('--ants_reg_quick', help='Use AntsRegistrationSynQuick inste
                     action='store_true')
 args = parser.parse_args()
 
-subject = args.participant_label
+subjects = args.participant_label
 
 
 def create_bet_mask_from_dwi(name, do_realignment=True):
@@ -764,53 +764,54 @@ if args.analysis_level == "participant":
     else:
         wf_dir = args.wf_base_dir
 
-    if len(subject) != 1:
-        raise Exception("Exactly one subjects needs to be specified {}".format(subject))
-    else:
-        subject = subject[0]
-
-    # get sessions
-    layout = BIDSLayout(args.bids_dir)
-    sessions = layout.get_sessions(subject="olm1001", datatype="dwi")
-    sessions.sort()
-
-    # set up acq for eddy
-    if "lhab" in subject:
-        acq_str = "0 1 0 {TotalReadoutTime}"
-        study = "lhab"
-    elif "CC" in subject:
-        acq_str = "0 -1 0 0.0684"
-        study = "camcan"
-    elif "olm" in subject:
-        acq_str = "0 1 0 {TotalReadoutTime}"
-        study = "olm"
-    else:
-        raise ("Cannot determine study")
-
-    wfs = []
     if args.ants_reg_quick:
         print("Use AntsRegistrationSynQuick for registration")
     else:
         print("Use AntsRegistrationSyn for registration")
 
-    wfs.append(run_process_dwi(wf_dir, subject, sessions, args, study, prep_pipe="mrtrix", acq_str=acq_str,
-                               ants_quick=args.ants_reg_quick))
+    layout = BIDSLayout(args.bids_dir)
+    if not subjects:
+        subjects = layout.get_subjects(datatype="dwi")
+    print(f"{len(subjects)} subject(s) found {subjects}")
 
-    wf = Workflow(name=subject)
-    wf.base_dir = wf_dir
-    wf.config['execution']['crashdump_dir'] = os.path.join(args.output_dir, "crash")
 
-    wf.add_nodes(wfs)
-    wf.write_graph(graph2use='colored')
+    for subject in subjects:
+        print(subject)
+        # get sessions
+        sessions = layout.get_sessions(subject=subject, datatype="dwi")
+        sessions.sort()
 
-    try:
-        wf.run(plugin='MultiProc', plugin_args={'n_procs': args.n_cpus})
-    except:
-        print("Something went wrong")
-        dump_dir = os.path.join(args.output_dir, "crash_dump_wdir", subject)
-        shutil.copytree(os.path.join(wf_dir, subject), dump_dir)
-        print("Copy working directory to " + dump_dir)
-        raise Exception()
+        # set up acq for eddy
+        if "lhab" in subject:
+            acq_str = "0 1 0 {TotalReadoutTime}"
+            study = "lhab"
+        elif "CC" in subject:
+            acq_str = "0 -1 0 0.0684"
+            study = "camcan"
+        elif "olm" in subject:
+            acq_str = "0 1 0 {TotalReadoutTime}"
+            study = "olm"
+        else:
+            raise ("Cannot determine study")
+        wfs = []
+        wfs.append(run_process_dwi(wf_dir, subject, sessions, args, study, prep_pipe="mrtrix", acq_str=acq_str,
+                                   ants_quick=args.ants_reg_quick))
+
+        wf = Workflow(name=subject)
+        wf.base_dir = wf_dir
+        wf.config['execution']['crashdump_dir'] = os.path.join(args.output_dir, "crash")
+
+        wf.add_nodes(wfs)
+        wf.write_graph(graph2use='colored')
+
+        try:
+            wf.run(plugin='MultiProc', plugin_args={'n_procs': args.n_cpus})
+        except:
+            print("Something went wrong")
+            dump_dir = os.path.join(args.output_dir, "crash_dump_wdir", subject)
+            shutil.copytree(os.path.join(wf_dir, subject), dump_dir)
+            print("Copy working directory to " + dump_dir)
+            raise Exception()
 
 elif args.analysis_level == "group":
     output_dir = os.path.join(args.output_dir, "00_group")
