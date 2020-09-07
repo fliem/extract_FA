@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 
 
 from __future__ import print_function, division, unicode_literals, absolute_import
@@ -96,7 +96,7 @@ class Dwibiascorrect(CommandLine):
     mrtrix3 dwi2mask command
     http://mrtrix.readthedocs.io/en/latest/reference/scripts/dwibiascorrect.html
     """
-    _cmd = "dwibiascorrect -info -ants"
+    _cmd = "dwibiascorrect ants"
     input_spec = DwibiascorrectInputSpec
     output_spec = DwibiascorrectOutputSpec
 
@@ -323,7 +323,7 @@ def extract_jhu(in_file, metric_labels, subject, session, atlas):
 
 
 from nipype.pipeline.engine import Node, Workflow, JoinNode
-from bids.grabbids import BIDSLayout
+from bids import BIDSLayout
 import nipype.interfaces.io as nio
 from nipype.interfaces import fsl, ants
 from nipype.interfaces.utility import Function
@@ -411,6 +411,8 @@ def run_process_dwi(wf_dir, subject, sessions, args, study, prep_pipe="mrtrix", 
         masking_algo = "mrtrix"
     elif study == "camcan":
         masking_algo = "bet"
+    elif study == "olm":
+        masking_algo = "mrtrix"
     else:
         raise Exception("Study not known " + study)
 
@@ -596,7 +598,6 @@ def run_process_dwi(wf_dir, subject, sessions, args, study, prep_pipe="mrtrix", 
     wf.connect(dwi_preprocessed, "bval", sinker_preproc, "dwi.@bval")
     wf.connect(dwi_preprocessed, "mask", sinker_preproc, "dwi.@mask")
 
-
     ########################
     # Tensor fit
     ########################
@@ -770,7 +771,7 @@ if args.analysis_level == "participant":
 
     # get sessions
     layout = BIDSLayout(args.bids_dir)
-    sessions = layout.get_sessions(subject=subject, modality="dwi")
+    sessions = layout.get_sessions(subject="olm1001", datatype="dwi")
     sessions.sort()
 
     # set up acq for eddy
@@ -780,6 +781,9 @@ if args.analysis_level == "participant":
     elif "CC" in subject:
         acq_str = "0 -1 0 0.0684"
         study = "camcan"
+    elif "olm" in subject:
+        acq_str = "0 1 0 {TotalReadoutTime}"
+        study = "olm"
     else:
         raise ("Cannot determine study")
 
