@@ -3,7 +3,7 @@
 
 from __future__ import print_function, division, unicode_literals, absolute_import
 from nipype.interfaces.base import (TraitedSpec, CommandLineInputSpec, CommandLine, File, Str, traits)
-
+import sys
 
 class DwidenoiseInputSpec(CommandLineInputSpec):
     in_file = File(desc="File", mandatory=True, argstr="%s", position=0, exists=True)
@@ -357,6 +357,7 @@ parser.add_argument('--ants_reg_quick', help='Use AntsRegistrationSynQuick inste
                     action='store_true')
 args = parser.parse_args()
 print("running extract_fa with args: ", args)
+print(sys.version)
 subjects = args.participant_label
 
 
