@@ -356,7 +356,7 @@ parser.add_argument('--n_cpus', help='Number of CPUs/cores available to use.', d
 parser.add_argument('--ants_reg_quick', help='Use AntsRegistrationSynQuick instead of AntsRegistrationSyn',
                     action='store_true')
 args = parser.parse_args()
-
+print("running extract_fa with args: ", args)
 subjects = args.participant_label
 
 
@@ -686,8 +686,8 @@ def run_process_dwi(wf_dir, subject, sessions, args, study, prep_pipe="mrtrix", 
         else:
             raise Exception("Atlas unknown " + atlas)
 
-        atlas_file = os.path.join(os.environ["FSLDIR"], "data/atlases", "JHU/JHU-ICBM-tracts-maxprob-thr{"
-                                                                        "}-1mm.nii.gz".format(thr))
+        atlas_file = os.path.join(os.environ["FSLDIR"], "data/atlases",
+                                  "JHU/JHU-ICBM-tracts-maxprob-thr{}-1mm.nii.gz".format(thr))
 
         out_file_tract = os.path.abspath(subject_session + "_atlas-{}_tract.pdf".format(atlas))
         display = plotting.plot_anat(in_file, title=subject_session)
@@ -773,7 +773,6 @@ if args.analysis_level == "participant":
     if not subjects:
         subjects = layout.get_subjects(datatype="dwi")
     print(f"{len(subjects)} subject(s) found {subjects}")
-
 
     for subject in subjects:
         print(subject)
