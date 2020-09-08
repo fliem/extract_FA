@@ -774,7 +774,7 @@ if args.analysis_level == "participant":
     layout = BIDSLayout(args.bids_dir)
     if not subjects:
         subjects = layout.get_subjects(datatype="dwi")
-    print(len(subjects) + " subject(s) found " + subjects)
+    print(f"{len(subjects)} subject(s) found {subjects}")
 
     for subject in subjects:
         print(subject)
