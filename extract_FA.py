@@ -5,6 +5,7 @@ from __future__ import print_function, division, unicode_literals, absolute_impo
 from nipype.interfaces.base import (TraitedSpec, CommandLineInputSpec, CommandLine, File, Str, traits)
 import sys
 
+
 class DwidenoiseInputSpec(CommandLineInputSpec):
     in_file = File(desc="File", mandatory=True, argstr="%s", position=0, exists=True)
     out_file = File(argstr='%s', name_source=['in_file'], hash_files=False, name_template='%s_denoised',
@@ -773,7 +774,7 @@ if args.analysis_level == "participant":
     layout = BIDSLayout(args.bids_dir)
     if not subjects:
         subjects = layout.get_subjects(datatype="dwi")
-    print(f"{len(subjects)} subject(s) found {subjects}")
+    print(len(subjects) + " subject(s) found " + subjects)
 
     for subject in subjects:
         print(subject)
