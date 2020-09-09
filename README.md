@@ -3,9 +3,9 @@
 ## Software
 * ANTS (2.1.0-gGIT-N)
 * fsl (5.0.9; eddy: eddy-patch-fsl-5.0.11)
-* mrtrix3 (rc2)
-* nipype (0.14.0)
-* nilearn (0.4.0)
+* mrtrix3 (3.0.1)
+* nipype (1.5.1)
+* nilearn (0.6.2)
 
 ## Pipeline
 
@@ -68,3 +68,4 @@ Extraction with nilearn.NiftiLabelsMasker.
 * v2.1 initial
 * v2.2 fixed raise if processing fails
 * v3 camcan: fsl bet for mask
+* v4 version updates and olm ready
