@@ -488,6 +488,10 @@ def run_process_dwi(wf_dir, subject, sessions, args, study, prep_pipe="mrtrix", 
     sinker_plots.inputs.base_directory = args.output_dir
     sinker_plots.inputs.parameterization = False
 
+    sinker_tract_plots = Node(nio.DataSink(), name='sinker_tract_plots')
+    sinker_tract_plots.inputs.base_directory = args.output_dir
+    sinker_tract_plots.inputs.parameterization = False
+
     sinker_extracted = Node(nio.DataSink(), name='sinker_extracted')
     sinker_extracted.inputs.base_directory = args.output_dir
     sinker_extracted.inputs.parameterization = False
@@ -716,7 +720,7 @@ def run_process_dwi(wf_dir, subject, sessions, args, study, prep_pipe="mrtrix", 
     wf.connect(transform_fa, "output_image", tract_plot, "in_file")
     wf.connect(format_subject_session, "subject_session_label", tract_plot, "subject_session")
     wf.connect(atlas_interface, "atlas", tract_plot, "atlas")
-    wf.connect(tract_plot, "out_file_tract", sinker_plots, "tractplots")
+    wf.connect(tract_plot, "out_file_tract", sinker_tract_plots, "tractplots")
 
     def concat_filenames_fct(in_file_fa, in_file_md, in_file_ad, in_file_rd):
         return [in_file_fa, in_file_md, in_file_ad, in_file_rd]
