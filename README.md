@@ -69,3 +69,4 @@ Extraction with nilearn.NiftiLabelsMasker.
 * v2.2 fixed raise if processing fails
 * v3 camcan: fsl bet for mask
 * v4 version updates and olm ready
+* v4.fix fixes an issue with writing the same plot multiple times
